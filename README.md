@@ -27,8 +27,8 @@ The platform currently models:
 - elongated propeller or blade targets, including custom uploaded silhouettes;
 - quadrotor UAV targets with body geometry, four propellers, and DJI-based presets;
 - fixed, waypoint-based, and manually recorded UAV trajectories;
-- PF32 nominal detector settings and user-defined detector overrides;
-- signal photons, solar-irradiance-dependent scene stray photons, and detector dark counts;
+- PF32 detector settings and user-defined detector overrides;
+- laser-reflection signal photons, solar-reflection signal photons, solar-irradiance-dependent scene stray photons, and detector dark counts;
 - frame-level and event-oriented SPAD output with CPU or CUDA Poisson sampling.
 
 This repository focuses on nearby dynamic-target detection. Its ambient-noise model is expressed as scene stray photons and detector noise rather than space-debris background terms.
@@ -58,9 +58,9 @@ The desktop interface exposes the selected compute backend, photon statistics, s
 | Target models | Spherical ball, blade strip, custom blade silhouette, quadrotor UAV |
 | UAV presets | DJI Mini 4 Pro, DJI Mavic 3 Pro, DJI Inspire 3, DJI Matrice 350 RTK |
 | Motion | Fixed pose, waypoint path, manual flight recording, attitude and propeller phase series |
-| Detector | PF32 nominal preset or custom SPAD settings |
+| Detector | PF32 preset or custom SPAD settings |
 | Noise | Scene stray photons scaled by current solar irradiance, plus separate detector dark counts |
-| Optical effects | Range, aperture, FOV clipping, atmospheric attenuation, reflectivity, dead time, saturation |
+| Optical effects | Independent transmitter divergence and receiver FOV, range, aperture, FOV clipping, atmospheric attenuation, reflectivity, dead time, saturation |
 | Compute | CPU fallback and optional CUDA acceleration for batched photon-count sampling |
 | Outputs | Lightweight summaries, full responses, asynchronous jobs, `.bin` count-cube downloads |
 | Interfaces | Angular web UI, Three.js visualization, FastAPI backend, Electron desktop shell |
@@ -197,10 +197,12 @@ npm run desktop:dist
 
 ## Research Notes
 
-- The `pf32_nominal` detector preset combines public PF32 figures with documented engineering approximations for active-imaging studies.
+- The `pf32` detector preset combines public PF32 figures with documented engineering approximations for active-imaging studies.
+- The default signal budget adds independent laser-reflection and solar-reflection terms. Scene stray photons remain an independent solar-driven detector-side term.
 - Scene stray photons and dark counts remain separate terms throughout the simulation.
 - CUDA accelerates the sampling path; researchers should still record the selected backend, dependency versions, random seed, and commit SHA when reporting results.
 - Model assumptions and warnings are returned in backend simulation responses where applicable.
+- Read the [physics model audit](docs/physics-model-audit.md) before using simulated photon counts as calibrated predictions.
 
 ## Citation
 

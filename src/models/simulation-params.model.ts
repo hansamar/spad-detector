@@ -115,6 +115,7 @@ export interface ISimulationParams {
   laserRepetitionFrequency: number; // Only for Pulsed
   laserPulseWidthNs: number; // Only for Pulsed
   laserWavelengthNm: number;
+  transmitterDivergenceMrad: number; // Full-angle transmitter beam divergence
 
   // Simulation
   nFrames: number;

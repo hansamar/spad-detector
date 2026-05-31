@@ -44,7 +44,7 @@ def main() -> None:
 
     hundred_k_params, _scenario = params_from_request(
         SimulateRequest(
-            detector_preset="pf32_nominal",
+            detector_preset="pf32",
             observation_time_s=2.0,
             sample_rate_hz=50_000,
             roi_w=32,
@@ -54,7 +54,7 @@ def main() -> None:
     assert int(round(hundred_k_params.observation_time_s * hundred_k_params.sample_rate_hz)) == 100_000
     two_hundred_k_params, _scenario = params_from_request(
         SimulateRequest(
-            detector_preset="pf32_nominal",
+            detector_preset="pf32",
             observation_time_s=4.0,
             sample_rate_hz=50_000,
             roi_w=32,
@@ -83,7 +83,7 @@ def main() -> None:
             sample_rate_hz=20,
         )
     )
-    assert spectral_params.detector_preset == "pf32_nominal"
+    assert spectral_params.detector_preset == "pf32"
     assert np.isclose(spectral_params.optical.quantum_efficiency, float(pf32_pdp_fraction(850)))
     assert np.isclose(spectral_params.target.solar_irradiance_w_m2_nm, float(am0_solar_irradiance_w_m2_nm(850)))
 
@@ -96,7 +96,7 @@ def main() -> None:
             sample_rate_hz=20,
         )
     )
-    assert override_params.detector_preset == "pf32_nominal"
+    assert override_params.detector_preset == "pf32"
     assert np.isclose(override_params.optical.quantum_efficiency, 0.123)
     assert np.isclose(override_params.target.solar_irradiance_w_m2_nm, 0.456)
 
@@ -124,7 +124,7 @@ def main() -> None:
 
     recorded_params, _ = params_from_request(
         SimulateRequest(
-            detector_preset="pf32_nominal",
+            detector_preset="pf32",
             observation_time_s=0.2,
             sample_rate_hz=20,
             target_trajectory_times_s=[0.0, 0.1, 0.25],
@@ -151,7 +151,7 @@ def main() -> None:
     summary = client.post(
         "/api/simulate/summary",
         json={
-            "detector_preset": "pf32_nominal",
+            "detector_preset": "pf32",
             "observation_time_s": 0.2,
             "sample_rate_hz": 20,
             "roi_w": 4,
@@ -178,11 +178,17 @@ def main() -> None:
     assert sum(sum(row) for row in sim["expected_signal_map"]) > 0
     assert sim["total_noise_photons"] >= sim["total_background_photons"]
     assert sim["total_noise_photons"] > sim["total_background_photons"]
+    assert sim["target_laser_detected_rate_cps"] > 0
+    assert sim["target_solar_detected_rate_cps"] > 0
+    assert np.isclose(
+        sim["target_detected_rate_cps"],
+        sim["target_laser_detected_rate_cps"] + sim["target_solar_detected_rate_cps"],
+    )
 
     job = client.post(
         "/api/simulate/jobs",
         json={
-            "detector_preset": "pf32_nominal",
+            "detector_preset": "pf32",
             "observation_time_s": 0.2,
             "sample_rate_hz": 20,
             "roi_w": 4,

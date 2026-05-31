@@ -162,3 +162,70 @@ def target_detected_rate_cps(
     photon_rate = P_recv / max(Egamma, 1e-30)
     detected_rate = photon_rate * receiver_efficiency * quantum_efficiency
     return max(detected_rate, 0.0)
+
+
+def effective_laser_average_power_w(
+    laser_mode: str,
+    laser_average_power_w: float,
+    laser_pulse_energy_j: float,
+    laser_repetition_frequency_hz: float,
+) -> float:
+    """Return transmitter average power for CW or pulsed operation."""
+    if str(laser_mode or "").lower() == "pulsed":
+        return max(float(laser_pulse_energy_j), 0.0) * max(float(laser_repetition_frequency_hz), 0.0)
+    return max(float(laser_average_power_w), 0.0)
+
+
+def laser_target_detected_rate_cps(
+    *,
+    laser_mode: str,
+    laser_average_power_w: float,
+    laser_pulse_energy_j: float,
+    laser_repetition_frequency_hz: float,
+    transmitter_divergence_mrad: float,
+    target_area_m2: float,
+    target_reflectivity: float,
+    phase_function_scale: float,
+    range_m,
+    aperture_diameter_m: float,
+    wavelength_nm: float,
+    receiver_efficiency: float,
+    quantum_efficiency: float,
+):
+    """Approximate detected laser-return rate for an on-axis Lambertian target.
+
+    The transmitter divergence is a full-angle Gaussian-beam engineering
+    parameter. The intercepted fraction uses the on-axis small-target
+    approximation and is capped at one so received energy cannot exceed the
+    transmitted laser-power budget.
+    """
+    power_w = effective_laser_average_power_w(
+        laser_mode,
+        laser_average_power_w,
+        laser_pulse_energy_j,
+        laser_repetition_frequency_hz,
+    )
+    safe_range_m = np.maximum(np.asarray(range_m, dtype=np.float64), 1.0)
+    half_angle_rad = max(float(transmitter_divergence_mrad), 1e-9) * 1e-3 / 2.0
+    beam_radius_m = np.maximum(safe_range_m * np.tan(half_angle_rad), 1e-9)
+    beam_area_m2 = np.pi * beam_radius_m**2
+    intercepted_fraction = np.clip(
+        2.0 * max(float(target_area_m2), 0.0) / np.maximum(beam_area_m2, 1e-24),
+        0.0,
+        1.0,
+    )
+    received_power_w = (
+        power_w
+        * intercepted_fraction
+        * max(float(target_reflectivity), 0.0)
+        * (aperture_area(aperture_diameter_m) / (np.pi * safe_range_m**2))
+        * max(float(phase_function_scale), 0.0)
+    )
+    detected_rate = (
+        received_power_w
+        / max(photon_energy_joule(wavelength_nm), 1e-30)
+        * max(float(receiver_efficiency), 0.0)
+        * max(float(quantum_efficiency), 0.0)
+    )
+    detected_rate = np.maximum(detected_rate, 0.0)
+    return float(detected_rate) if detected_rate.ndim == 0 else detected_rate

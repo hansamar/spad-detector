@@ -751,8 +751,7 @@
             </div>
             <div>
               <label class="text-sm">{{ l.t('solarIrradiance')() }}</label>
-              <input type="number" step="0.001" min="0" [value]="solarIrradiance()"
-                [disabled]="selectedDetectorPresetId() !== 'custom'"
+              <input data-testid="solar-irradiance" type="number" step="0.001" min="0" [value]="solarIrradiance()"
                 (input)="onNumberInput(solarIrradiance, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
             </div>
             <div class="flex items-center justify-between">
@@ -774,10 +773,22 @@
             </div>
             <div>
               <label class="text-sm">{{ l.t('laserAvgPower')() }}</label>
-              <input type="range" min="0.01" max="3" step="0.01" [value]="laserAveragePower()"
-                (input)="onNumberInput(laserAveragePower, $event)"
+              <div class="flex items-center space-x-2 mt-1">
+                <input type="range" min="0.000001" max="0.001" step="0.000001" [value]="laserAveragePower()"
+                  (input)="onNumberInput(laserAveragePower, $event)"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                <input type="number" min="0.000001" max="3" step="0.000001" [value]="laserAveragePower()"
+                  (input)="onNumberInput(laserAveragePower, $event)"
+                  class="w-28 bg-gray-900 rounded p-2 text-sm text-right">
+              </div>
+              <span class="text-xs text-gray-400">{{ laserAveragePower() | number:'1.6-6' }} W</span>
+            </div>
+            <div>
+              <label class="text-sm">{{ l.t('transmitterDivergence')() }}</label>
+              <input type="range" min="0.05" max="20" step="0.05" [value]="transmitterDivergenceMrad()"
+                (input)="onNumberInput(transmitterDivergenceMrad, $event)"
                 class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
-              <span class="text-xs text-gray-400">{{ laserAveragePower() }} W</span>
+              <span class="text-xs text-gray-400">{{ transmitterDivergenceMrad() | number:'1.2-2' }} mrad</span>
             </div>
             <div [class]="!isPulsedMode() ? 'opacity-50' : ''">
               <label class="text-sm">{{ l.t('pulseWidth')() }}</label>
@@ -833,7 +844,7 @@
             <span class="text-cyan-400 transition-transform" [class.rotate-180]="!simSettingsOpen()">▼</span>
           </summary>
           <div class="p-4 border-t border-gray-600 space-y-4">
-            <div><label class="text-sm">{{ l.t('nFrames')() }}</label><input type="number" [value]="nFrames()"
+            <div><label class="text-sm">{{ l.t('nFrames')() }}</label><input data-testid="n-frames" type="number" [value]="nFrames()"
                 (input)="onNumberInput(nFrames, $event)" class="w-full bg-gray-900 rounded p-2 text-sm"></div>
             <div class="rounded border p-3 text-xs space-y-2" [class]="simulationBudgetStatus().class">
               <div class="flex justify-between gap-3">
@@ -916,13 +927,13 @@
 
   <!-- Results Modal -->
   @if (showResultsModal()) {
-  <div class="absolute inset-0 bg-black/60 flex items-center justify-center p-4 z-40"
+  <div data-testid="results-modal" class="absolute inset-0 bg-black/60 flex items-center justify-center p-4 z-40"
     (click)="showResultsModal.set(false)">
     <div (click)="$event.stopPropagation()"
       class="bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl text-gray-200 max-h-[90vh] overflow-y-auto">
       <div class="flex justify-between items-center mb-4">
         <h2 class="text-2xl font-bold text-cyan-400">{{ l.t('resultsTitle')() }}</h2>
-        <button (click)="showResultsModal.set(false)"
+        <button data-testid="close-results" (click)="showResultsModal.set(false)"
           class="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
       </div>
 
@@ -948,9 +959,16 @@
       <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-sm">
         <div>{{ l.t('signalPhotons')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.total_signal_photons | number:'1.0-0' }}</span></div>
         <div>{{ l.t('backgroundPhotons')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.total_background_photons | number:'1.0-0' }}</span></div>
+        <div>{{ l.t('laserSignalRate')() }} <span data-testid="laser-signal-rate" class="font-mono text-cyan-200">{{ backendSummary()?.target_laser_detected_rate_cps | number:'1.0-0' }} cps</span></div>
+        <div>{{ l.t('solarSignalRate')() }} <span data-testid="solar-signal-rate" class="font-mono text-cyan-200">{{ backendSummary()?.target_solar_detected_rate_cps | number:'1.0-0' }} cps</span></div>
         <div>{{ l.t('visibilityRatio')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.visibility_ratio | percent:'1.1-1' }}</span></div>
         <div>{{ l.t('sampleRate')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.sample_rate_hz | number:'1.0-0' }} Hz</span></div>
       </div>
+      @if (backendSummary()?.saturation_warning) {
+      <div class="bg-yellow-950/40 border border-yellow-700/50 text-yellow-100 p-3 rounded-lg mb-4 text-sm">
+        {{ l.t('saturationWarning')() }}
+      </div>
+      }
       }
       @if (!backendSummary()) {
       <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-center">

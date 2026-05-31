@@ -19,8 +19,8 @@ PRESET_INFO: dict[str, DetectorPresetInfo] = {
         label="Custom detector",
         assumptions=["User-defined detector settings are used without PF32 preset overrides."],
     ),
-    "pf32_nominal": DetectorPresetInfo(
-        key="pf32_nominal",
+    "pf32": DetectorPresetInfo(
+        key="pf32",
         label="PF32",
         assumptions=[
             "32x32 silicon SPAD array based on PF32 public datasheet figures.",
@@ -31,14 +31,14 @@ PRESET_INFO: dict[str, DetectorPresetInfo] = {
 
 
 def apply_detector_preset(params: SimParams, preset: str | None) -> None:
-    selected = preset or "pf32_nominal"
+    selected = preset or "pf32"
     if selected not in PRESET_INFO:
         raise ValueError(f"Unsupported detector preset: {selected}")
     params.detector_preset = selected
     if selected == "custom":
         return
 
-    # PF32 nominal: public figures plus engineering approximations for active imaging studies.
+    # PF32: public figures plus engineering approximations for active imaging studies.
     params.image.roi_w = 32
     params.image.roi_h = 32
     params.image.center_x = 15.5
@@ -46,16 +46,11 @@ def apply_detector_preset(params: SimParams, preset: str | None) -> None:
     params.image.pixel_pitch_um = 50.0
     params.image.fill_factor = 0.015
     params.image.microlens_gain = 13.3
-    params.optical.detector_fov_urad = 50.0 * 3.141592653589793 / 180.0 * 1e6
-    params.optical.receiver_efficiency = 0.48
-    params.optical.wavelength_nm = 550.0
-    params.optical.filter_bandwidth_nm = 50.0
     params.optical.quantum_efficiency = float(pf32_pdp_fraction(params.optical.wavelength_nm))
-    params.target.solar_irradiance_w_m2_nm = float(am0_solar_irradiance_w_m2_nm(params.optical.wavelength_nm))
     params.spad.dark_count_rate_cps = 100.0
-    params.spad.timing_jitter_ns = 0.30
+    params.spad.timing_jitter_ns = 0.2 / 2.355
     params.spad.tdc_bin_width_ns = 0.055
-    params.spad.irf_fwhm_ps = 300.0
+    params.spad.irf_fwhm_ps = 200.0
     params.spad.max_count_rate_cps_per_pixel = 20e6
     params.spad.max_count_per_frame = 65535
 
@@ -67,7 +62,7 @@ def refresh_pf32_spectral_defaults(
     update_solar_irradiance: bool = True,
 ) -> None:
     """Keep PF32 wavelength-dependent defaults coherent after request overrides."""
-    if params.detector_preset != "pf32_nominal":
+    if params.detector_preset != "pf32":
         return
     if update_quantum_efficiency:
         params.optical.quantum_efficiency = float(pf32_pdp_fraction(params.optical.wavelength_nm))

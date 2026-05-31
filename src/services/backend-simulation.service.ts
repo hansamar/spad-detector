@@ -69,14 +69,6 @@ export function backendEnvironmentScales(params: Pick<ISimulationParams, 'solarI
   };
 }
 
-function activeLaserIrradianceWm2Nm(params: ISimulationParams, targetRangeM: number): number {
-  const fovRad = Math.max(1e-6, params.detectorFov * Math.PI / 180);
-  const beamRadiusM = Math.max(1e-4, targetRangeM * Math.tan(fovRad / 2));
-  const beamAreaM2 = Math.PI * beamRadiusM * beamRadiusM;
-  const bandwidthNm = Math.max(1e-3, params.filterBandwidth);
-  return Math.max(0, params.laserAveragePower) / (beamAreaM2 * bandwidthNm);
-}
-
 const MAX_BACKEND_SHAPE_POINTS = 512;
 
 type BackendTrajectoryPayload = {
@@ -148,6 +140,8 @@ export interface IBackendSimulationSummary {
   visibility_ratio: number;
   dropout_ratio: number;
   target_detected_rate_cps: number;
+  target_laser_detected_rate_cps: number;
+  target_solar_detected_rate_cps: number;
   truth_freq_hz: number;
   truth_row: number;
   truth_col: number;
@@ -574,11 +568,9 @@ export class BackendSimulationService {
     const recordedAverageRpm = recorded
       ? recorded.reduce((sum, sample) => sum + sample.propellerRpms.reduce((innerSum, rpm) => innerSum + rpm, 0), 0) / Math.max(1, recorded.length * 4)
       : backendTrajectory ? trajectoryAverageRpm : params.rotationSpeed;
-    const activeIlluminationWm2Nm = activeLaserIrradianceWm2Nm(params, targetRangeM);
-
     return {
       scenario: null,
-      detector_preset: params.detectorPresetId === 'custom' ? 'custom' : 'pf32_nominal',
+      detector_preset: params.detectorPresetId === 'custom' ? 'custom' : 'pf32',
       observation_time_s: observationTimeS,
       sample_rate_hz: 1 / dtS,
       compute_backend: 'auto',
@@ -606,7 +598,14 @@ export class BackendSimulationService {
       propeller_diameter_m: dronePropellerDiameterM,
       target_reflectivity: params.reflectivity,
       propeller_reflectivity: params.propellerReflectivity ?? params.reflectivity,
-      solar_irradiance: activeIlluminationWm2Nm,
+      solar_irradiance: environmentScales.solar_irradiance,
+      illumination_mode: 'laser_plus_solar',
+      laser_mode: params.laserMode.toLowerCase(),
+      laser_average_power_w: params.laserAveragePower,
+      laser_pulse_energy_j: params.laserPulseEnergy,
+      laser_repetition_frequency_hz: params.laserRepetitionFrequency,
+      laser_pulse_width_ns: params.laserPulseWidthNs,
+      transmitter_divergence_mrad: params.transmitterDivergenceMrad,
       specular_fraction: params.targetType === 'Drone' ? 0.08 : 0.04,
       outage_fraction: 0,
       glint_probability: 0,

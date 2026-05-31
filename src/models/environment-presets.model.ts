@@ -22,7 +22,7 @@ export const ENVIRONMENT_PRESETS: IEnvironmentPreset[] = [
     label: 'Indoor / Dim Bench',
     labelZh: '室内弱光台架',
     description: 'Low ambient light for controlled detector checkout.',
-    solarScale: 0.001,
+    solarScale: 0.00005,
     visibilityKm: 50,
     skyTurbidity: 0.15,
     horizonHaze: 0.1,

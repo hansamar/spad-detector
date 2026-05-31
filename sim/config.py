@@ -4,11 +4,11 @@ from typing import Any
 
 @dataclass
 class OpticalParams:
-    wavelength_nm: float = 550.0
-    aperture_diameter_m: float = 0.5
-    receiver_efficiency: float = 0.48
-    quantum_efficiency: float = 0.274
-    filter_bandwidth_nm: float = 50.0
+    wavelength_nm: float = 780.0
+    aperture_diameter_m: float = 0.025
+    receiver_efficiency: float = 0.05
+    quantum_efficiency: float = 0.07
+    filter_bandwidth_nm: float = 10.0
     detector_fov_urad: float = 50.0 * 3.141592653589793 / 180.0 * 1e6
     stray_light_rejection_ratio: float = 1e6
     detector_off_axis_urad_x: float = 0.0
@@ -22,7 +22,7 @@ class OpticalParams:
 class SpadParams:
     dark_count_rate_cps: float = 100.0
     dead_time_ns: float = 20.0
-    timing_jitter_ns: float = 2.0
+    timing_jitter_ns: float = 0.2 / 2.355
     pde_nonuniform_sigma: float = 0.05
     hot_pixel_fraction: float = 0.01
     hot_pixel_scale: float = 5.0
@@ -30,10 +30,10 @@ class SpadParams:
     dead_time_model: str = "nonparalyzable"
     afterpulse_probability: float = 0.0
     crosstalk_probability: float = 0.0
-    tdc_bin_width_ns: float = 0.0
+    tdc_bin_width_ns: float = 0.055
     max_count_per_frame: int = 65535
-    irf_fwhm_ps: float = 300.0
-    max_count_rate_cps_per_pixel: float = 5e6
+    irf_fwhm_ps: float = 200.0
+    max_count_rate_cps_per_pixel: float = 20e6
 
 
 @dataclass
@@ -47,29 +47,40 @@ class BackgroundParams:
 
 
 @dataclass
+class IlluminationParams:
+    mode: str = "laser_plus_solar"
+    laser_mode: str = "pulsed"
+    laser_average_power_w: float = 1e-6
+    laser_pulse_energy_j: float = 1e-12
+    laser_repetition_frequency_hz: float = 1e6
+    laser_pulse_width_ns: float = 1.0
+    transmitter_divergence_mrad: float = 1.0
+
+
+@dataclass
 class TargetParams:
-    target_area_m2: float = 1.0
-    target_length_m: float = 1.0
+    target_area_m2: float = 0.025
+    target_length_m: float = 0.5
     target_width_m: float = 0.05
-    target_height_m: float = 0.05
+    target_height_m: float = 0.002
     propeller_diameter_m: float = 0.10
-    target_reflectivity: float = 0.14
-    propeller_reflectivity: float = 0.14
-    solar_irradiance_w_m2_nm: float = 1.86
+    target_reflectivity: float = 0.1
+    propeller_reflectivity: float = 0.3
+    solar_irradiance_w_m2_nm: float = 0.000068
     phase_function_scale: float = 1.0
     phase_function_model: str = "lambert"
     specular_fraction: float = 0.0
     specular_width_deg: float = 5.0
-    target_range_m: float = 400e3
-    reference_range_m: float = 400e3
+    target_range_m: float = 2.0
+    reference_range_m: float = 2.0
     target_radial_velocity_mps: float = 0.0
     target_radial_accel_mps2: float = 0.0
-    spin_hz: float = 1.4
-    precession_hz: float = 0.14
+    spin_hz: float = 200.0
+    precession_hz: float = 0.0
     spin_axis_elevation_deg: float = 45.0
     spin_axis_azimuth_deg: float = 0.0
     body_shape: str = "blade_strip"
-    tumbling_hz: float = 1000.0
+    tumbling_hz: float = 200.0
     modulation_depth: float = 0.35
     harmonic2_depth: float = 0.12
     harmonic3_depth: float = 0.04
@@ -78,7 +89,7 @@ class TargetParams:
     phase3: float = 1.1
     slow_envelope_depth: float = 0.15
     slow_envelope_hz: float = 5.0
-    outage_fraction: float = 0.05
+    outage_fraction: float = 0.0
     outage_seed: int = 123
     outage_mode: str = "random_segments"
     outage_period_s: float = 6.0
@@ -169,7 +180,7 @@ class SimParams:
     sample_rate_hz: float = 50.0
     seed: int = 42
     compute_backend: str = "auto"
-    detector_preset: str = "pf32_nominal"
+    detector_preset: str = "pf32"
     simulation_tier: str = "physics_informed"
     simulation_mode: str = "frame"
     lightcurve_mode: str = "attitude_driven"
@@ -179,6 +190,7 @@ class SimParams:
     optical: OpticalParams = field(default_factory=OpticalParams)
     spad: SpadParams = field(default_factory=SpadParams)
     background: BackgroundParams = field(default_factory=BackgroundParams)
+    illumination: IlluminationParams = field(default_factory=IlluminationParams)
     target: TargetParams = field(default_factory=TargetParams)
     image: ImageParams = field(default_factory=ImageParams)
     geometry: GeometryParams = field(default_factory=GeometryParams)

@@ -145,7 +145,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
 
   // Detector
   readonly detectorPresets = DETECTOR_PRESETS;
-  selectedDetectorPresetId = signal('pf32_nominal');
+  selectedDetectorPresetId = signal('pf32');
   resolutionW = signal(32);
   resolutionH = signal(32);
   detectorFov = signal(50);
@@ -161,8 +161,8 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   filterBandwidth = signal(10);
   darkCountRate = signal(100);
   deadTimeNs = signal(20);
-  timingJitterNs = signal(0.3);
-  irfFwhmPs = signal(300);
+  timingJitterNs = signal(0.2 / 2.355);
+  irfFwhmPs = signal(200);
   maxCountRateCpsPerPixel = signal(20e6);
   timeResolutionPs = signal(256);
   tdcBitDepth = signal(13); // Default to 13 bits (8191)
@@ -173,13 +173,14 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   selectedEnvironmentPresetId = signal('lab_dim');
   selectedEnvironmentPreset = computed(() => findEnvironmentPreset(this.selectedEnvironmentPresetId()));
   laserMode = signal<'Pulsed' | 'CW'>('Pulsed');
-  solarIrradiance = signal(0.001);
+  solarIrradiance = signal(0.000068);
   atmosphericAttenuationEnabled = signal(true);
   atmosphericVisibilityKm = signal(50);
   laserWavelengthNm = signal(780);
-  laserAveragePower = signal(0.1);
+  laserAveragePower = signal(1e-6);
   laserPulseWidthNs = signal(1);
   laserRepetitionFrequency = signal(1000000);
+  transmitterDivergenceMrad = signal(1);
 
   // Simulation
   nFrames = signal(20000);
@@ -381,6 +382,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     laserRepetitionFrequency: this.laserRepetitionFrequency(),
     laserPulseWidthNs: this.laserPulseWidthNs(),
     laserWavelengthNm: this.laserWavelengthNm(),
+    transmitterDivergenceMrad: this.transmitterDivergenceMrad(),
     nFrames: this.nFrames(),
     cameraHeight: 1.0,
     };
@@ -1903,11 +1905,11 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.sun);
     this.updateSolarVisuals();
 
-    const laserFovRad = this.detectorFov() * Math.PI / 180;
+    const laserDivergenceRad = Math.max(1e-6, this.transmitterDivergenceMrad() * 1e-3);
 
     const laserColor = this.wavelengthToThreeColor(this.laserWavelengthNm());
     this.laserSpotlight = new THREE.SpotLight(laserColor, this.laserAveragePower() * 1500);
-    this.laserSpotlight.angle = laserFovRad / 2;
+    this.laserSpotlight.angle = laserDivergenceRad / 2;
     this.laserSpotlight.penumbra = 0.2;
     this.laserSpotlight.distance = 10000;
     this.laserSpotlight.decay = 1.5;

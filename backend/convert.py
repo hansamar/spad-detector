@@ -137,7 +137,7 @@ def _apply_recorded_trajectory(req: SimulateRequest, params: SimParams) -> None:
     off_axis_x = np.deg2rad(bearing_yaw_deg - detector_yaw_deg) * 1e6
     off_axis_y = -np.deg2rad(bearing_pitch_deg - detector_pitch_deg) * 1e6
     half_fov = max(float(params.optical.detector_fov_urad) / 2.0, 1e-6)
-    in_fov = (np.abs(off_axis_x) <= half_fov) & (np.abs(off_axis_y) <= half_fov)
+    in_fov = np.hypot(off_axis_x, off_axis_y) <= half_fov
 
     params.target.target_range_m = float(range_t[0])
     params.target.reference_range_m = float(range_t[0])
@@ -263,6 +263,14 @@ def params_from_request(req: SimulateRequest) -> tuple[SimParams, dict | None]:
 
     _apply_if_set(req, "scene_stray_rate", lambda v: setattr(params.background, "scene_stray_rate_cps_per_pixel", v))
 
+    _apply_if_set(req, "illumination_mode", lambda v: setattr(params.illumination, "mode", v))
+    _apply_if_set(req, "laser_mode", lambda v: setattr(params.illumination, "laser_mode", v))
+    _apply_if_set(req, "laser_average_power_w", lambda v: setattr(params.illumination, "laser_average_power_w", v))
+    _apply_if_set(req, "laser_pulse_energy_j", lambda v: setattr(params.illumination, "laser_pulse_energy_j", v))
+    _apply_if_set(req, "laser_repetition_frequency_hz", lambda v: setattr(params.illumination, "laser_repetition_frequency_hz", v))
+    _apply_if_set(req, "laser_pulse_width_ns", lambda v: setattr(params.illumination, "laser_pulse_width_ns", v))
+    _apply_if_set(req, "transmitter_divergence_mrad", lambda v: setattr(params.illumination, "transmitter_divergence_mrad", v))
+
     _apply_if_set(req, "aperture_diameter_m", lambda v: setattr(params.optical, "aperture_diameter_m", v))
     _apply_if_set(req, "receiver_efficiency", lambda v: setattr(params.optical, "receiver_efficiency", v))
     _apply_if_set(req, "quantum_efficiency", lambda v: setattr(params.optical, "quantum_efficiency", v))
@@ -301,7 +309,10 @@ def params_from_request(req: SimulateRequest) -> tuple[SimParams, dict | None]:
     refresh_pf32_spectral_defaults(
         params,
         update_quantum_efficiency="quantum_efficiency" not in req.model_fields_set,
-        update_solar_irradiance="solar_irradiance" not in req.model_fields_set,
+        update_solar_irradiance=(
+            "wavelength_nm" in req.model_fields_set
+            and "solar_irradiance" not in req.model_fields_set
+        ),
     )
 
     return params, scenario_info
@@ -351,6 +362,8 @@ def result_to_response(
         roi_w=result["roi_w"],
         sample_rate_hz=result["sample_rate_hz"],
         target_detected_rate_cps=result["target_detected_rate_cps"],
+        target_laser_detected_rate_cps=result["target_laser_detected_rate_cps"],
+        target_solar_detected_rate_cps=result["target_solar_detected_rate_cps"],
         mean_signal_per_frame=result["mean_signal_per_frame"],
         mean_background_per_frame=result["mean_background_per_frame"],
         mean_dark_per_frame=result["mean_dark_per_frame"],
@@ -429,6 +442,8 @@ def result_to_summary_response(
         visibility_ratio=result["visibility_ratio"],
         dropout_ratio=result["dropout_ratio"],
         target_detected_rate_cps=result["target_detected_rate_cps"],
+        target_laser_detected_rate_cps=result["target_laser_detected_rate_cps"],
+        target_solar_detected_rate_cps=result["target_solar_detected_rate_cps"],
         truth_freq_hz=result["truth_freq_hz"],
         truth_row=result["truth_row"],
         truth_col=result["truth_col"],

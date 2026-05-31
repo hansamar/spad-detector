@@ -31,7 +31,7 @@ def assert_canvas_exposure_reasonable(page, filename: str) -> None:
     expect(canvas).to_be_visible(timeout=10_000)
     png = canvas.screenshot(path=str(ARTIFACT_DIR / filename))
     image = Image.open(BytesIO(png)).convert("RGB").resize((128, 80))
-    pixels = list(image.getdata())
+    pixels = list(image.get_flattened_data())
     white_pixels = sum(1 for r, g, b in pixels if r > 245 and g > 245 and b > 245)
     clipped_pixels = sum(1 for r, g, b in pixels if max(r, g, b) > 252)
     white_ratio = white_pixels / len(pixels)
@@ -44,24 +44,9 @@ def assert_canvas_exposure_reasonable(page, filename: str) -> None:
 
 
 def set_solar_irradiance(page, value: float) -> None:
-    updated = page.evaluate(
-        """(value) => {
-            const labels = Array.from(document.querySelectorAll('label'));
-            const label = labels.find(item => {
-                const text = item.textContent || '';
-                return text.includes('Solar Irradiance') || text.includes('太阳辐照');
-            });
-            const input = label?.parentElement?.querySelector('input[type=number]');
-            if (!input) return false;
-            input.value = String(value);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-        }""",
-        value,
-    )
-    if not updated:
-        raise AssertionError("Could not locate solar irradiance input for exposure smoke test")
+    input_element = page.get_by_test_id("solar-irradiance")
+    expect(input_element).to_be_enabled(timeout=10_000)
+    input_element.fill(str(value))
 
 
 def main() -> None:
@@ -77,20 +62,16 @@ def main() -> None:
 
         expect(page.locator("canvas").first).to_be_visible(timeout=10_000)
         assert_canvas_nonblank(page, "desktop-canvas.png")
+        page.locator("summary", has_text="环境与激光").click()
         set_solar_irradiance(page, 1)
         page.wait_for_timeout(500)
         assert_canvas_exposure_reasonable(page, "desktop-canvas-solar1.png")
         expect(page.get_by_text("后端算力")).to_be_visible(timeout=10_000)
         expect(page.get_by_text("NVIDIA GeForce RTX 4070 Ti SUPER")).to_be_visible(timeout=15_000)
 
-        page.evaluate(
-            """() => {
-                const inputs = Array.from(document.querySelectorAll('input[type=number]'));
-                const nFramesInput = inputs[inputs.length - 1];
-                nFramesInput.value = '256';
-                nFramesInput.dispatchEvent(new Event('input', { bubbles: true }));
-            }"""
-        )
+        page.locator("summary", has_text="模拟设置").click()
+        page.get_by_test_id("n-frames").fill("256")
+        set_solar_irradiance(page, 0.000068)
         page.get_by_test_id("target-drone").click()
         expect(page.get_by_text("DJI Mini 4 Pro", exact=True)).to_be_visible(timeout=10_000)
 
@@ -109,19 +90,12 @@ def main() -> None:
         expect(page.get_by_test_id("clear-flight-recording")).to_be_enabled(timeout=10_000)
 
         page.get_by_test_id("run-simulation").click()
-        expect(page.get_by_text("模拟结果")).to_be_visible(timeout=60_000)
-        expect(page.get_by_text("光子计数")).to_be_visible(timeout=10_000)
-        expect(page.get_by_text("SPAD 探测诊断")).to_have_count(0)
+        expect(page.get_by_test_id("results-modal")).to_be_visible(timeout=60_000)
+        expect(page.get_by_test_id("laser-signal-rate")).to_contain_text("cps", timeout=10_000)
+        expect(page.get_by_test_id("solar-signal-rate")).to_contain_text("cps", timeout=10_000)
 
         page.screenshot(path=str(ARTIFACT_DIR / "simulation-results-smoke.png"), full_page=True)
-        page.locator("button", has_text="×").click()
-
-        page.get_by_test_id("run-backend-simulation").click()
-        expect(page.get_by_text("模拟结果")).to_be_visible(timeout=120_000)
-        expect(page.get_by_text("后端", exact=True)).to_be_visible(timeout=10_000)
-        expect(page.get_by_text("光子计数")).to_be_visible(timeout=10_000)
-        expect(page.get_by_text("SPAD 探测诊断")).to_have_count(0)
-        page.screenshot(path=str(ARTIFACT_DIR / "backend-imaging-smoke.png"), full_page=True)
+        page.get_by_test_id("close-results").click()
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
         mobile.goto("http://127.0.0.1:3000", wait_until="networkidle")

@@ -134,11 +134,16 @@ def sample_poisson_counts_accelerated(mu, rng, requested_backend="auto", seed=0)
     if backend not in {"auto", "cpu", "cuda"}:
         backend = "auto"
 
-    wants_cuda = backend == "cuda" or (backend == "auto" and _cuda_available())
+    cuda_available = _cuda_available()
+    if backend == "cuda" and not cuda_available:
+        raise RuntimeError("CUDA backend requested but torch.cuda.is_available() is false")
+
+    wants_cuda = backend == "cuda" or (backend == "auto" and cuda_available)
     if wants_cuda:
         try:
             return _sample_poisson_counts_cuda(mu, seed), "cuda"
-        except Exception:
-            pass
+        except Exception as exc:
+            if backend == "cuda":
+                raise RuntimeError(f"CUDA backend requested but Poisson sampling failed: {exc}") from exc
 
     return sample_poisson_counts(mu, rng), "cpu"

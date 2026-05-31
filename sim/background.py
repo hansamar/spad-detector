@@ -20,6 +20,7 @@ def background_spatial_map(roi_h, roi_w, sigma=0.0, gradient_x=0.0, gradient_y=0
     gradient = gradient_x * col_coords[np.newaxis, :] + gradient_y * row_coords[:, np.newaxis]
     bg_spatial = bg_spatial + gradient
 
+    bg_spatial = np.maximum(bg_spatial, 0.05)
     mean_val = np.mean(bg_spatial)
     if mean_val > 0:
         bg_spatial = bg_spatial / mean_val

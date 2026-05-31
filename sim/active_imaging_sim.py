@@ -37,6 +37,7 @@ from sim.imaging import (
 from sim.physics import (
     aperture_area,
     atmospheric_transmittance,
+    laser_target_detected_rate_cps,
     make_visibility_mask,
     modulation_series,
     target_detected_rate_cps,
@@ -196,8 +197,13 @@ def _target_signal(
     los_unit_t: np.ndarray,
     phase_angle_t: np.ndarray,
     params: SimParams,
-) -> tuple[np.ndarray, np.ndarray, float, float, float, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float, np.ndarray]:
     aperture = aperture_area(params.optical.aperture_diameter_m)
+    illumination_mode = str(params.illumination.mode or "laser_plus_solar").lower()
+    solar_enabled = illumination_mode in {"solar", "laser_plus_solar"}
+    laser_enabled = illumination_mode in {"laser", "laser_plus_solar"}
+    solar_rate_cps_t = np.zeros_like(t, dtype=np.float64)
+    laser_rate_cps_t = np.zeros_like(t, dtype=np.float64)
 
     active_shape = str(params.target.body_shape or "") in {"sphere", "blade_strip", "drone_quad"}
     use_attitude = params.lightcurve_mode == "attitude_driven" or (
@@ -232,7 +238,7 @@ def _target_signal(
 
         R_bi_all = spin_rotation_matrix_series(t, spin_hz, axis_t, phase0=params.target.phase1)
         normals_t = face_normals_in_inertial(R_bi_all, faces)
-        signal_scale_t, target_rate_cps_t = target_lightcurve_attitude_driven(
+        attitude_scale_t, attitude_solar_rate_cps_t = target_lightcurve_attitude_driven(
             faces=faces,
             normals_t=normals_t,
             sun_unit_t=sun_unit_t,
@@ -247,11 +253,47 @@ def _target_signal(
             phase_function_scale=params.target.phase_function_scale,
             specular_width_deg=params.target.specular_width_deg,
         )
+        if solar_enabled:
+            solar_rate_cps_t = attitude_solar_rate_cps_t
+        if laser_enabled:
+            laser_attitude_scale_t, _ = target_lightcurve_attitude_driven(
+                faces=faces,
+                normals_t=normals_t,
+                sun_unit_t=los_unit_t,
+                los_unit_t=los_unit_t,
+                range_t=R_t,
+                solar_irradiance=1.0,
+                aperture_area_m2=aperture,
+                filter_bw_nm=params.optical.filter_bandwidth_nm,
+                wavelength_nm=params.optical.wavelength_nm,
+                receiver_eff=params.optical.receiver_efficiency,
+                quantum_eff=params.optical.quantum_efficiency,
+                phase_function_scale=params.target.phase_function_scale,
+                specular_width_deg=params.target.specular_width_deg,
+            )
+            laser_rate_cps_t = laser_target_detected_rate_cps(
+                laser_mode=params.illumination.laser_mode,
+                laser_average_power_w=params.illumination.laser_average_power_w,
+                laser_pulse_energy_j=params.illumination.laser_pulse_energy_j,
+                laser_repetition_frequency_hz=params.illumination.laser_repetition_frequency_hz,
+                transmitter_divergence_mrad=params.illumination.transmitter_divergence_mrad,
+                target_area_m2=params.target.target_area_m2,
+                target_reflectivity=params.target.target_reflectivity,
+                phase_function_scale=params.target.phase_function_scale,
+                range_m=R_t,
+                aperture_diameter_m=params.optical.aperture_diameter_m,
+                wavelength_nm=params.optical.wavelength_nm,
+                receiver_efficiency=params.optical.receiver_efficiency,
+                quantum_efficiency=params.optical.quantum_efficiency,
+            ) * np.maximum(laser_attitude_scale_t, 0.0)
+        target_rate_cps_t = solar_rate_cps_t + laser_rate_cps_t
+        peak_rate = float(np.max(target_rate_cps_t))
+        signal_scale_t = target_rate_cps_t / peak_rate if peak_rate > 0 else np.zeros_like(target_rate_cps_t)
         truth_freq_hz = spin_hz
         truth_precession_hz = params.target.precession_hz
         projection_rotation_t = R_bi_all
     else:
-        mod = modulation_series(
+        base_mod = modulation_series(
             t=t,
             tumbling_hz=params.target.tumbling_hz,
             m1=params.target.modulation_depth,
@@ -265,22 +307,43 @@ def _target_signal(
         )
         if params.simulation_tier == "physics_informed":
             phase_gain = 0.45 + 0.55 * np.clip(np.cos(phase_angle_t / 2.0), 0.0, 1.0)
-            mod = mod * phase_gain
-        base_rate_cps = target_detected_rate_cps(
-            irradiance_w_m2_nm=params.target.solar_irradiance_w_m2_nm,
-            target_area_m2=params.target.target_area_m2,
-            target_reflectivity=params.target.target_reflectivity,
-            phase_function_scale=params.target.phase_function_scale,
-            range_m=params.target.reference_range_m,
-            aperture_diameter_m=params.optical.aperture_diameter_m,
-            filter_bandwidth_nm=params.optical.filter_bandwidth_nm,
-            wavelength_nm=params.optical.wavelength_nm,
-            receiver_efficiency=params.optical.receiver_efficiency,
-            quantum_efficiency=params.optical.quantum_efficiency,
-        )
-        range_factor = (params.target.reference_range_m / np.maximum(R_t, 1.0)) ** 2
-        target_rate_cps_t = base_rate_cps * mod * range_factor
-        signal_scale_t = mod.copy()
+            solar_mod = base_mod * phase_gain
+        else:
+            solar_mod = base_mod
+        if solar_enabled:
+            base_solar_rate_cps = target_detected_rate_cps(
+                irradiance_w_m2_nm=params.target.solar_irradiance_w_m2_nm,
+                target_area_m2=params.target.target_area_m2,
+                target_reflectivity=params.target.target_reflectivity,
+                phase_function_scale=params.target.phase_function_scale,
+                range_m=params.target.reference_range_m,
+                aperture_diameter_m=params.optical.aperture_diameter_m,
+                filter_bandwidth_nm=params.optical.filter_bandwidth_nm,
+                wavelength_nm=params.optical.wavelength_nm,
+                receiver_efficiency=params.optical.receiver_efficiency,
+                quantum_efficiency=params.optical.quantum_efficiency,
+            )
+            range_factor = (params.target.reference_range_m / np.maximum(R_t, 1.0)) ** 2
+            solar_rate_cps_t = base_solar_rate_cps * solar_mod * range_factor
+        if laser_enabled:
+            laser_rate_cps_t = laser_target_detected_rate_cps(
+                laser_mode=params.illumination.laser_mode,
+                laser_average_power_w=params.illumination.laser_average_power_w,
+                laser_pulse_energy_j=params.illumination.laser_pulse_energy_j,
+                laser_repetition_frequency_hz=params.illumination.laser_repetition_frequency_hz,
+                transmitter_divergence_mrad=params.illumination.transmitter_divergence_mrad,
+                target_area_m2=params.target.target_area_m2,
+                target_reflectivity=params.target.target_reflectivity,
+                phase_function_scale=params.target.phase_function_scale,
+                range_m=R_t,
+                aperture_diameter_m=params.optical.aperture_diameter_m,
+                wavelength_nm=params.optical.wavelength_nm,
+                receiver_efficiency=params.optical.receiver_efficiency,
+                quantum_efficiency=params.optical.quantum_efficiency,
+            ) * base_mod
+        target_rate_cps_t = solar_rate_cps_t + laser_rate_cps_t
+        peak_rate = float(np.max(target_rate_cps_t))
+        signal_scale_t = target_rate_cps_t / peak_rate if peak_rate > 0 else np.zeros_like(target_rate_cps_t)
         truth_freq_hz = params.target.tumbling_hz
         truth_precession_hz = params.target.slow_envelope_hz
         projection_rotation_t = np.broadcast_to(np.eye(3, dtype=np.float64), (t.size, 3, 3)).copy()
@@ -291,7 +354,16 @@ def _target_signal(
         + 0.35 * params.target.harmonic3_depth
         + 0.2 * max(params.target.specular_fraction, params.target.glint_probability)
     )
-    return signal_scale_t, target_rate_cps_t, truth_freq_hz, truth_precession_hz, harmonic_truth_strength, projection_rotation_t
+    return (
+        signal_scale_t,
+        target_rate_cps_t,
+        solar_rate_cps_t,
+        laser_rate_cps_t,
+        truth_freq_hz,
+        truth_precession_hz,
+        harmonic_truth_strength,
+        projection_rotation_t,
+    )
 
 
 def _background_series(
@@ -318,42 +390,42 @@ def _background_scaling(params: SimParams, pixel_ifov_urad: float) -> float:
     return 1.0
 
 
-def _event_stream_from_mu(
-    mu_cube: np.ndarray,
+def _shot_noise_snr_db(total_signal: float, total_noise: float) -> float:
+    """Aggregate photon-counting SNR for independent Poisson signal and noise."""
+    denominator = np.sqrt(max(total_signal + total_noise, 1e-24))
+    return float(20.0 * np.log10(max(total_signal, 1e-12) / denominator))
+
+
+def _event_stream_from_counts(
+    counts_cube: np.ndarray,
     dt: float,
     timing_jitter_ns: float,
     tdc_bin_width_ns: float,
-    max_count_rate_cps_per_pixel: float,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
-    n_frames, roi_h, roi_w = mu_cube.shape
+    n_frames, roi_h, roi_w = counts_cube.shape
     event_times: list[np.ndarray] = []
     event_pixels: list[np.ndarray] = []
-    dead_zone_s = 1.0 / max(max_count_rate_cps_per_pixel, 1.0)
 
     for frame_idx in range(n_frames):
-        frame_mu = mu_cube[frame_idx]
-        active_pixels = np.argwhere(frame_mu > 0)
+        frame_counts = counts_cube[frame_idx]
+        active_pixels = np.argwhere(frame_counts > 0)
         if active_pixels.size == 0:
             continue
         for row, col in active_pixels:
-            lam = float(frame_mu[row, col])
-            count = int(rng.poisson(lam))
+            count = int(frame_counts[row, col])
             if count <= 0:
                 continue
             times = frame_idx * dt + np.sort(rng.uniform(0.0, dt, size=count))
-            if dead_zone_s > 0 and times.size > 1:
-                kept = [times[0]]
-                for current in times[1:]:
-                    if current - kept[-1] >= dead_zone_s:
-                        kept.append(current)
-                times = np.asarray(kept, dtype=np.float64)
             if timing_jitter_ns > 0 and times.size > 0:
                 times = times + rng.normal(0.0, timing_jitter_ns * 1e-9, size=times.size)
             if tdc_bin_width_ns > 0 and times.size > 0:
                 bin_s = tdc_bin_width_ns * 1e-9
                 times = np.round(times / bin_s) * bin_s
-            times = np.clip(times, frame_idx * dt, (frame_idx + 1) * dt)
+            upper_bound = float(
+                np.nextafter(np.float32((frame_idx + 1) * dt), np.float32(frame_idx * dt))
+            )
+            times = np.clip(times, frame_idx * dt, upper_bound)
             event_times.append(times.astype(np.float32))
             event_pixels.append(np.full(times.size, row * roi_w + col, dtype=np.int32))
 
@@ -847,7 +919,16 @@ def simulate_active_spad(params: SimParams):
     roi_w = params.image.roi_w
 
     R_t, sun_unit_t, los_unit_t, phase_angle_t, assumptions = _build_geometry(t, params)
-    signal_scale_t, target_rate_cps_t, truth_freq_hz, truth_precession_hz, harmonic_truth_strength, projection_rotation_t = _target_signal(
+    (
+        signal_scale_t,
+        target_rate_cps_t,
+        solar_rate_cps_t,
+        laser_rate_cps_t,
+        truth_freq_hz,
+        truth_precession_hz,
+        harmonic_truth_strength,
+        projection_rotation_t,
+    ) = _target_signal(
         t, R_t, sun_unit_t, los_unit_t, phase_angle_t, params
     )
     total_fov_urad, pixel_ifov_urad, off_axis_urad = _detector_geometry(params)
@@ -1015,7 +1096,10 @@ def simulate_active_spad(params: SimParams):
         enabled=params.optical.atmospheric_attenuation_enabled,
     )
     atmospheric_transmission_mean = float(np.mean(atmospheric_t))
-    final_rate_cps_t = target_rate_cps_t * atmospheric_t * visibility_t * glint_t * fov_visibility_t
+    common_detection_factor_t = atmospheric_t * visibility_t * glint_t * fov_visibility_t
+    final_solar_rate_cps_t = solar_rate_cps_t * common_detection_factor_t
+    final_laser_rate_cps_t = laser_rate_cps_t * common_detection_factor_t
+    final_rate_cps_t = final_solar_rate_cps_t + final_laser_rate_cps_t
     expected_signal_t = final_rate_cps_t * dt
     body_vertices = simple_body_vertices(params.target.body_shape, target_area_m2=params.target.target_area_m2)
     projected_width_urad_t, projected_height_urad_t = projected_extent_series_from_vertices(
@@ -1080,7 +1164,7 @@ def simulate_active_spad(params: SimParams):
             1.0,
         )
     )
-    snr_db = 10.0 * np.log10((total_signal + 1e-12) / (total_noise + 1e-12))
+    snr_db = _shot_noise_snr_db(total_signal, total_noise)
 
     valid_truth = truth_in_fov_t > 0
     truth_row = int(np.clip(round(float(np.mean(cy_t[valid_truth])) if np.any(valid_truth) else float(np.mean(cy_t))), 0, roi_h - 1))
@@ -1091,17 +1175,16 @@ def simulate_active_spad(params: SimParams):
     event_pixels = None
     if params.simulation_mode == "event" or params.save_event_list:
         max_events = 5_000_000
-        expected_events = float(np.sum(mu_corrected))
-        if expected_events > max_events:
+        event_count = int(np.sum(counts, dtype=np.int64))
+        if event_count > max_events:
             raise ValueError(
-                f"event output budget exceeded: expected {expected_events:.0f} events > {max_events}"
+                f"event output budget exceeded: sampled {event_count} events > {max_events}"
             )
-        event_times, event_pixels = _event_stream_from_mu(
-            mu_corrected,
+        event_times, event_pixels = _event_stream_from_counts(
+            counts,
             dt,
             params.spad.timing_jitter_ns,
             params.spad.tdc_bin_width_ns,
-            params.spad.max_count_rate_cps_per_pixel,
             rng,
         )
 
@@ -1110,7 +1193,7 @@ def simulate_active_spad(params: SimParams):
     if params.simulation_tier == "physics_informed":
         warnings.append("Physics-informed mode is geometry-aware but uses a near-range scene model, not full wave-optics propagation.")
     if params.simulation_mode == "event":
-        warnings.append("Event stream uses bin-wise point-process sampling with detector timing limits, but not a full TCSPC transport simulation.")
+        warnings.append("Event timestamps are synthesized from dead-time-corrected frame counts with timing jitter and TDC quantization, not full TCSPC transport.")
     if params.sample_rate_hz >= 1e4:
         warnings.append("High sample rate sets narrow time bins; low counts per bin can still be valid if total photon budget remains sufficient.")
     if fov_visibility < 0.999:
@@ -1118,6 +1201,11 @@ def simulate_active_spad(params: SimParams):
     if scene_mode != "centered_roi":
         assumptions.append("Scene mode uses geometry-informed focal-plane motion instead of a fixed centered ROI target.")
     assumptions.append("Focal-plane signal uses a projected-silhouette footprint with only a light optical blur layer.")
+    assumptions.append("Reported SNR uses the aggregate Poisson shot-noise approximation S/sqrt(S+B+D).")
+    if params.illumination.mode in {"laser", "laser_plus_solar"}:
+        assumptions.append("Laser return uses an on-axis Gaussian-beam engineering approximation with an independent transmitter divergence and capped intercepted power.")
+    if params.illumination.mode in {"solar", "laser_plus_solar"}:
+        assumptions.append("Solar-reflection signal is computed independently from solar-driven scene stray photons.")
 
     preset = preset_summary(params)
     detector_summary = {
@@ -1191,6 +1279,8 @@ def simulate_active_spad(params: SimParams):
         "observed_total_counts": int(np.sum(counts)),
         "snr_db": float(snr_db),
         "target_detected_rate_cps": float(np.mean(final_rate_cps_t)),
+        "target_laser_detected_rate_cps": float(np.mean(final_laser_rate_cps_t)),
+        "target_solar_detected_rate_cps": float(np.mean(final_solar_rate_cps_t)),
         "mean_signal_per_frame": mean_signal_per_frame,
         "mean_background_per_frame": mean_background_per_frame,
         "mean_dark_per_frame": mean_dark_per_frame,

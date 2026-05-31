@@ -9,8 +9,10 @@ SimulationTier = Literal["baseline_empirical", "physics_informed"]
 OutputMode = Literal["frame", "event"]
 LightcurveMode = Literal["analytic_modulation", "attitude_driven"]
 BodyShape = Literal["sphere", "plate", "blade_strip", "drone_quad"]
-DetectorPreset = Literal["custom", "pf32_nominal"]
+DetectorPreset = Literal["custom", "pf32"]
 ComputeBackend = Literal["auto", "cpu", "cuda"]
+IlluminationMode = Literal["laser", "solar", "laser_plus_solar"]
+LaserMode = Literal["pulsed", "cw"]
 
 MAX_BACKEND_FRAMES = 200_000
 MAX_BACKEND_ROI_PIXELS = 16_384
@@ -87,6 +89,14 @@ class SimulateRequest(BaseModel):
     detector_pitch_deg: float | None = None
 
     scene_stray_rate: float | None = Field(default=None, ge=0)
+
+    illumination_mode: IlluminationMode | None = None
+    laser_mode: LaserMode | None = None
+    laser_average_power_w: float | None = Field(default=None, ge=0)
+    laser_pulse_energy_j: float | None = Field(default=None, ge=0)
+    laser_repetition_frequency_hz: float | None = Field(default=None, gt=0)
+    laser_pulse_width_ns: float | None = Field(default=None, ge=0)
+    transmitter_divergence_mrad: float | None = Field(default=None, gt=0)
 
     aperture_diameter_m: float | None = Field(default=None, gt=0)
     receiver_efficiency: float | None = Field(default=None, ge=0, le=1)
@@ -229,6 +239,8 @@ class SimulateResponse(BaseModel):
     roi_w: int
     sample_rate_hz: float
     target_detected_rate_cps: float
+    target_laser_detected_rate_cps: float
+    target_solar_detected_rate_cps: float
     mean_signal_per_frame: float
     mean_background_per_frame: float
     mean_dark_per_frame: float
@@ -296,6 +308,8 @@ class SimulateSummaryResponse(BaseModel):
     visibility_ratio: float
     dropout_ratio: float
     target_detected_rate_cps: float
+    target_laser_detected_rate_cps: float
+    target_solar_detected_rate_cps: float
     truth_freq_hz: float
     truth_row: int
     truth_col: int

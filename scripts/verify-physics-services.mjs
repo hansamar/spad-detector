@@ -43,6 +43,11 @@ const budget = loadTsModule('src/services/simulation-budget.service.ts', [
   'estimateSimulationBudget',
 ]);
 
+const environmentPresets = loadTsModule('src/models/environment-presets.model.ts', [
+  'ENVIRONMENT_PRESETS',
+  'findEnvironmentPreset',
+]);
+
 const backendSimulation = loadTsModule('src/services/backend-simulation.service.ts', [
   'encodeCountsCubeFromDataset',
   'diagnosticFrequencyBand',
@@ -219,19 +224,22 @@ const detector = loadTsModule('src/services/detector-preset.service.ts', [
   'uradToDeg',
 ], spectral);
 
-const pf32 = detector.getDetectorPreset('pf32_nominal');
+const pf32 = detector.getDetectorPreset('pf32');
 assert.equal(detector.DETECTOR_PRESETS.length, 1);
 assert.equal(pf32.roi.width, 32);
 assert.equal(pf32.roi.height, 32);
 assert.equal(pf32.pixelPitchUm, 50);
 assert.equal(Number(detector.uradToDeg(pf32.detectorFovUrad).toFixed(1)), 50.0);
+assert.equal(pf32.irfFwhmPs, 200);
+assert.equal(Number(pf32.timingJitterNs.toFixed(4)), Number((0.2 / 2.355).toFixed(4)));
 
-const resolved = detector.resolveDetectorSettings('pf32_nominal', 850, 10);
+const resolved = detector.resolveDetectorSettings('pf32', 850, 10);
 assert.equal(Number(resolved.quantumEfficiency.toFixed(3)), 0.049);
 assert.equal(Number(resolved.solarIrradiance.toFixed(2)), 1.16);
 assert.equal(resolved.resolution.width, 32);
 assert.equal(resolved.resolution.height, 32);
 assert.equal(Number(resolved.detectorFovDeg.toFixed(1)), 50.0);
+assert.equal(environmentPresets.findEnvironmentPreset('lab_dim').solarScale, 0.00005);
 
 for (const relativePath of [
   'src/models/simulation-params.model.ts',
@@ -263,6 +271,12 @@ for (const hiddenHardwareInput of [
   assert.equal(detectorPanelTemplate.includes(hiddenHardwareInput), false);
 }
 const backendModels = fs.readFileSync(path.join(root, 'backend/models.py'), 'utf8');
-assert.equal(backendModels.includes('DetectorPreset = Literal["custom", "pf32_nominal"]'), true);
+assert.equal(backendModels.includes('DetectorPreset = Literal["custom", "pf32"]'), true);
+const backendSimulationSource = fs.readFileSync(path.join(root, 'src/services/backend-simulation.service.ts'), 'utf8');
+assert.equal(backendSimulationSource.includes('activeLaserIrradianceWm2Nm'), false);
+assert.equal(backendSimulationSource.includes("illumination_mode: 'laser_plus_solar'"), true);
+assert.equal(backendSimulationSource.includes('transmitter_divergence_mrad: params.transmitterDivergenceMrad'), true);
+const localSimulationSource = fs.readFileSync(path.join(root, 'src/services/simulation.service.ts'), 'utf8');
+assert.equal(localSimulationSource.includes('transmitterDivergenceMrad * 1e-3 / 2'), true);
 
 console.log('physics service checks passed');

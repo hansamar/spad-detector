@@ -206,7 +206,7 @@ export class SimulationService {
         return new Promise((resolve) => {
             const {
                 resolution, nFrames, frameDurationUs, cameraHeight, initialPos, initialVel, restitution,
-                laserMode, laserRepetitionFrequency, laserPulseWidthNs, laserAveragePower, laserPulseEnergy,
+                laserMode, laserRepetitionFrequency, laserPulseWidthNs, laserAveragePower, laserPulseEnergy, transmitterDivergenceMrad,
                 timeResolutionPs, tdcMaxCount, rotationRadius, rotationSpeed, rotationCenter,
                 bladePitch, targetType, ballMotionType, bladeMotionType, detectorYaw, detectorPitch, uploadedImage, waypoints, pathSpeeds, pathRotationSpeeds, droneScale
             } = params;
@@ -692,11 +692,11 @@ export class SimulationService {
                         const distance = Math.sqrt(localPos.x ** 2 + localPos.y ** 2 + localPos.z ** 2);
 
                         for (const info of pixelPhysicsInfo) {
-                            const { detectorFov, systemEfficiency, apertureDiameter, quantumEfficiency, laserWavelengthNm } = params;
+                            const { systemEfficiency, apertureDiameter, quantumEfficiency, laserWavelengthNm } = params;
                             const datasetIndex = frameIdx * totalPixels + info.row * resolution.width + info.col;
                             if (dataset[datasetIndex] !== emptyPixelValue) continue;
 
-                            const beamHalfAngle = this.degreesToRadians(detectorFov) / 2;
+                            const beamHalfAngle = Math.max(1e-9, transmitterDivergenceMrad * 1e-3 / 2);
                             const beamRadiusAtTarget = distance * Math.tan(beamHalfAngle);
                             const pixelAngularSize = fovRad / resolution.width;
                             const r_dist_from_beam_center = distance * Math.tan(Math.sqrt(((info.col + 0.5) - centerCol) ** 2 + ((info.row + 0.5) - centerRow) ** 2) * pixelAngularSize);

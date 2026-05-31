@@ -44,7 +44,7 @@ export interface IResolvedDetectorSettings {
 
 export const DETECTOR_PRESETS: IDetectorPreset[] = [
   {
-    id: 'pf32_nominal',
+    id: 'pf32',
     label: 'PF32',
     roi: { width: 32, height: 32 },
     pixelPitchUm: 50,
@@ -56,9 +56,9 @@ export const DETECTOR_PRESETS: IDetectorPreset[] = [
     filterBandwidthNm: 50,
     darkCountRateCps: 100,
     deadTimeNs: 20,
-    timingJitterNs: 0.30,
+    timingJitterNs: 0.2 / 2.355,
     tdcBinWidthNs: 0.055,
-    irfFwhmPs: 300,
+    irfFwhmPs: 200,
     maxCountRateCpsPerPixel: 20e6,
     maxCountPerFrame: 65535,
     pdeNonuniformSigma: 0.05,
@@ -68,6 +68,7 @@ export const DETECTOR_PRESETS: IDetectorPreset[] = [
     assumptions: [
       '32x32 silicon SPAD array based on PF32 public datasheet figures.',
       'Fill factor and microlens gain are engineering approximations for imaging studies.',
+      'Detector FOV, receiver efficiency, wavelength, and filter bandwidth are optical-system engineering defaults.',
     ],
   },
 ];
