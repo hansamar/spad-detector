@@ -1,0 +1,79 @@
+{
+  "name": "spad-detector",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Professional desktop SPAD detector simulation platform with UAV scene control and backend photon imaging.",
+  "author": "SPAD Detector Simulator Team",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "ng serve --host 127.0.0.1 --port 3000",
+    "build": "ng build",
+    "preview": "ng serve --configuration=production",
+    "backend": "node scripts/start-backend.cjs",
+    "desktop": "npm run build && electron .",
+    "desktop:dev": "concurrently -k -n FRONTEND,DESKTOP -c cyan,magenta \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\"",
+    "desktop:pack": "npm run build && electron-builder --dir",
+    "desktop:dist": "npm run build && electron-builder",
+    "verify:physics": "node scripts/verify-physics-services.mjs",
+    "verify:backend": "python scripts/verify_backend_capabilities.py && python scripts/verify_backend_projection.py",
+    "verify:startup": "node scripts/verify-backend-startup-cuda.mjs"
+  },
+  "build": {
+    "appId": "com.spad.detector.simulator",
+    "productName": "SPAD Detector Professional Simulator",
+    "asar": false,
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "extraMetadata": {
+      "dependencies": {}
+    },
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "!node_modules/**/*",
+      "desktop/**/*",
+      "scripts/start-backend.cjs",
+      "dist/**/*",
+      "backend/**/*",
+      "sim/**/*",
+      "requirements.txt",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@angular/build": "^21.0.0",
+    "@angular/cli": "^21.0.0",
+    "@angular/common": "^21.0.0",
+    "@angular/compiler": "^21.0.0",
+    "@angular/compiler-cli": "^21.0.0",
+    "@angular/core": "^21.0.0",
+    "@angular/platform-browser": "^21.0.0",
+    "rxjs": "^7.8.2",
+    "tailwindcss": "latest",
+    "three": "0.164.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "concurrently": "^9.2.1",
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1",
+    "typescript": "~5.9.3",
+    "vite": "^6.2.0",
+    "wait-on": "^9.0.10"
+  }
+}

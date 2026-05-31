@@ -1,0 +1,1007 @@
+<div class="relative h-full w-full overflow-hidden bg-gray-900 text-gray-200 lg:flex">
+  <!-- Control Panel -->
+  <aside
+    class="absolute top-0 left-0 h-full transform bg-gray-800 transition-transform duration-300 ease-in-out z-30 lg:relative lg:translate-x-0 lg:flex-shrink-0 flex"
+    [style.width.px]="panelWidth()" [class]="isPanelOpen() ? 'translate-x-0' : '-translate-x-full'">
+
+    <!-- Content Container -->
+    <div class="flex-grow h-full overflow-y-auto p-4 custom-scrollbar">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-cyan-400">{{ l.t('title')() }}</h1>
+        <div class="flex items-center">
+          <button (click)="l.toggleLanguage()"
+            class="text-sm font-semibold text-cyan-400 hover:text-cyan-300 transition-colors pr-4 lg:pr-0">
+            {{ l.t('languageToggle')() }}
+          </button>
+          <button (click)="isPanelOpen.set(false)" class="text-gray-400 hover:text-white lg:hidden">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
+              stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Simulation Controls -->
+      <div class="mb-6 space-y-3">
+        <button data-testid="run-simulation" (click)="runSimulation()" [disabled]="isSimulating() || isPreviewing() || isBackendSimulating() || !backendCapabilities()"
+          class="w-full bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center">
+          @if (isBackendSimulating()) {
+          <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none"
+            viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+            </path>
+          </svg>
+          {{ l.t('backendSimulating')() }}
+          } @else {
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
+              clip-rule="evenodd" />
+          </svg>
+          {{ l.t('runSimulation')() }}
+          }
+        </button>
+
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-xs space-y-1">
+          <div class="flex justify-between gap-3">
+            <span class="text-gray-400">{{ l.t('backendCompute')() }}</span>
+            <button (click)="refreshBackendCapabilities()" class="text-cyan-300 hover:text-cyan-100 pointer-events-auto">{{ l.t('refresh')() }}</button>
+          </div>
+          @if (backendCapabilities()) {
+            <p class="font-mono text-gray-100">{{ backendCapabilities()?.recommended_backend | uppercase }} / {{ backendCapabilities()?.gpu_name || 'CPU' }}</p>
+            <p class="text-gray-400">Torch {{ backendCapabilities()?.torch_version || 'N/A' }} / CUDA {{ backendCapabilities()?.torch_cuda_version || 'N/A' }}</p>
+          } @else {
+            <p class="text-yellow-300">{{ l.t('backendUnavailable')() }}</p>
+            @if (backendError()) {
+              <p class="text-gray-500 break-all">{{ backendError() }}</p>
+            }
+          }
+        </div>
+
+        <button (click)="previewTrajectory()" [disabled]="isSimulating() || isPreviewing() || isBackendSimulating()"
+          class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24"
+            stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          </svg>
+          {{ l.t('previewTrajectory')() }}
+        </button>
+
+        <button (click)="downloadData()" [disabled]="!simulationResult() && !backendDownloadUrl()"
+          class="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24"
+            stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          {{ l.t('downloadData')() }}
+        </button>
+        @if (backendJob() && backendJob()?.status !== 'completed') {
+          <div class="rounded border border-cyan-700/50 bg-cyan-950/30 p-3 text-xs text-cyan-100">
+            {{ l.t('backendJobStatus')() }}:
+            <span class="font-mono">{{ backendJob()?.status }}</span>
+          </div>
+        }
+      </div>
+
+      <!-- Parameter Accordions -->
+      <div class="space-y-2">
+        <!-- Target Settings -->
+        <details class="bg-gray-700/50 rounded-lg" [open]="targetSettingsOpen()">
+          <summary (click)="$event.preventDefault(); targetSettingsOpen.set(!targetSettingsOpen())"
+            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
+            {{ l.t('targetParams')() }}
+            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!targetSettingsOpen()">▼</span>
+          </summary>
+          <div class="p-4 border-t border-gray-600 space-y-4">
+            <div>
+              <label class="text-sm mb-2 block">{{ l.t('targetType')() }}</label>
+              <div class="grid grid-cols-3 gap-2">
+                <button data-testid="target-ball" (click)="setTargetType('Ball')"
+                  [class]="targetType() === 'Ball' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors text-sm">
+                  {{ l.t('targetTypeBall')() }}
+                </button>
+                <button data-testid="target-blade" (click)="setTargetType('Blade')"
+                  [class]="targetType() === 'Blade' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors text-sm">
+                  {{ l.t('targetTypeBlade')() }}
+                </button>
+                <button data-testid="target-drone" (click)="setTargetType('Drone')"
+                  [class]="targetType() === 'Drone' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors text-sm">
+                  {{ l.t('targetTypeDrone')() }}
+                </button>
+              </div>
+            </div>
+
+            @if (targetType() === 'Drone') {
+            <div class="space-y-3 rounded-md border border-cyan-700/40 bg-cyan-950/20 p-3">
+              <div>
+                <label class="text-sm mb-2 block">{{ l.t('dronePreset')() }}</label>
+                <select [value]="selectedDronePresetId()" (change)="onDronePresetChange($event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm">
+                  @for (preset of dronePresets; track preset.id) {
+                  <option [value]="preset.id">{{ preset.model }} - {{ preset.className }}</option>
+                  }
+                </select>
+              </div>
+              <div class="grid grid-cols-2 gap-2 text-xs text-gray-300">
+                <div>{{ l.t('droneMass')() }} <span class="font-mono text-cyan-200">{{ selectedDronePreset().massKg }} kg</span></div>
+                <div>{{ l.t('droneMaxSpeed')() }} <span class="font-mono text-cyan-200">{{ selectedDronePreset().maxHorizontalSpeedMps }} m/s</span></div>
+                <div>{{ l.t('droneSize')() }} <span class="font-mono text-cyan-200">{{ selectedDronePreset().dimensions.lengthM }} x {{ selectedDronePreset().dimensions.widthM }} m</span></div>
+                <div>{{ l.t('droneRotor')() }} <span class="font-mono text-cyan-200">{{ selectedDronePreset().nominalHoverRpm }} RPM</span></div>
+              </div>
+              @if (bladeMotionType() === 'Manual') {
+              <div class="space-y-2">
+                <div>
+                  <label class="text-xs text-gray-400">{{ l.t('manualSpeed')() }}</label>
+                  <input type="range" min="0.5" max="12" step="0.5" [value]="manualDroneSpeed()"
+                    (input)="onNumberInput(manualDroneSpeed, $event)"
+                    class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                  <span class="text-xs text-gray-400">{{ manualDroneSpeed() }} m/s</span>
+                </div>
+                <button data-testid="capture-manual-drone-pose" (click)="captureManualDronePose()"
+                  class="w-full bg-cyan-800 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-md transition-colors text-sm">
+                  {{ l.t('capturePose')() }}
+                </button>
+                <div class="grid grid-cols-2 gap-2">
+                  @if (!manualDroneRecording()) {
+                  <button data-testid="start-flight-recording" (click)="startManualDroneRecording()"
+                    class="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2 px-3 rounded-md transition-colors text-sm">
+                    {{ l.t('startFlightRecording')() }}
+                  </button>
+                  } @else {
+                  <button data-testid="stop-flight-recording" (click)="stopManualDroneRecording()"
+                    class="w-full bg-amber-700 hover:bg-amber-600 text-white font-bold py-2 px-3 rounded-md transition-colors text-sm">
+                    {{ l.t('stopFlightRecording')() }}
+                  </button>
+                  }
+                  <button data-testid="clear-flight-recording" (click)="clearManualDroneRecording()" [disabled]="manualDroneRecordedSamples().length === 0"
+                    class="w-full bg-gray-900 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 px-3 rounded-md transition-colors text-sm">
+                    {{ l.t('clearFlightRecording')() }}
+                  </button>
+                </div>
+                <div class="rounded-md border border-cyan-800/40 bg-gray-950/60 p-2 text-xs text-gray-300">
+                  <div class="mb-1 text-cyan-200">{{ l.t('manualFlightState')() }}</div>
+                  <div class="grid grid-cols-3 gap-2 font-mono">
+                    <span>Y {{ manualDroneYaw() | number:'1.0-0' }}°</span>
+                    <span>P {{ manualDronePitch() | number:'1.0-0' }}°</span>
+                    <span>R {{ manualDroneRoll() | number:'1.0-0' }}°</span>
+                  </div>
+                  <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-cyan-100">
+                    <span>M1 {{ manualDronePropellerRpms()[0] | number:'1.0-0' }}</span>
+                    <span>M2 {{ manualDronePropellerRpms()[1] | number:'1.0-0' }}</span>
+                    <span>M3 {{ manualDronePropellerRpms()[2] | number:'1.0-0' }}</span>
+                    <span>M4 {{ manualDronePropellerRpms()[3] | number:'1.0-0' }}</span>
+                  </div>
+                </div>
+                <div class="rounded-md border border-cyan-800/40 bg-gray-950/60 p-2 text-xs text-gray-300">
+                  <div class="flex justify-between">
+                    <span>{{ l.t('recordedFlight')() }}</span>
+                    <span class="font-mono text-cyan-200">{{ manualDroneRecordedSamples().length }} {{ l.t('samples')() }}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>{{ l.t('recordedDuration')() }}</span>
+                    <span class="font-mono text-cyan-200">{{ manualDroneRecordedDuration() | number:'1.1-2' }} s</span>
+                  </div>
+                </div>
+              </div>
+              }
+            </div>
+            }
+
+            @if (targetType() === 'Ball') {
+            <div class="space-y-4 pt-4 border-t border-gray-600/50">
+              <label class="text-sm mb-2 block">{{ l.t('motionType')() }}</label>
+              <div class="grid grid-cols-2 gap-2">
+                <button (click)="ballMotionType.set('Gravity')"
+                  [class]="ballMotionType() === 'Gravity' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('motionTypeGravity')() }}
+                </button>
+                <button (click)="ballMotionType.set('Rotation')"
+                  [class]="ballMotionType() === 'Rotation' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('motionTypeRotation')() }}
+                </button>
+              </div>
+            </div>
+            }
+
+            @if (targetType() === 'Blade' || targetType() === 'Drone') {
+            <div class="space-y-4 pt-4 border-t border-gray-600/50">
+              <label class="text-sm mb-2 block">{{ l.t('motionType')() }}</label>
+              <div [class]="targetType() === 'Drone' ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-2 gap-2'">
+                <button (click)="targetType() === 'Drone' ? setDroneMotionType('Fixed') : setBladeMotionType('Fixed')"
+                  [class]="bladeMotionType() === 'Fixed' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('motionTypeFixed')() }}
+                </button>
+                <button (click)="targetType() === 'Drone' ? setDroneMotionType('Path') : setBladeMotionType('Path')"
+                  [class]="bladeMotionType() === 'Path' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('motionTypePath')() }}
+                </button>
+                @if (targetType() === 'Drone') {
+                <button data-testid="manual-flight-mode" (click)="setDroneMotionType('Manual')"
+                  [class]="bladeMotionType() === 'Manual' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('manualFlight')() }}
+                </button>
+                }
+              </div>
+            </div>
+            }
+
+            @if ((targetType() === 'Blade' || targetType() === 'Drone') && bladeMotionType() === 'Path') {
+            <div class="space-y-4 pt-4 border-t border-gray-600/50">
+              <h3 class="text-md font-semibold text-cyan-300">{{ l.t('pathPlanning')() }}</h3>
+              <p class="text-xs text-gray-400">{{ l.t('pathPlanningDesc')() }}</p>
+
+              <div class="space-y-1">
+                @for (waypoint of waypoints(); track waypoint.id; let i = $index; let last = $last) {
+                <div class="bg-gray-900/70 p-3 rounded-lg">
+                  <div class="flex justify-between items-center mb-2">
+                    <h4 class="font-medium text-sm">{{ l.t('waypoint')() }} {{ i + 1 }}</h4>
+                    @if (waypoints().length > 2) {
+                    <button (click)="removeWaypoint(i)"
+                      class="text-red-400 hover:text-red-300 text-xs font-semibold px-2 py-1 rounded hover:bg-red-900/50 transition-colors">{{
+                      l.t('remove')() }}</button>
+                    }
+                  </div>
+                  <div class="grid grid-cols-3 gap-2">
+                    <div><label class="text-xs text-gray-400">X</label><input type="number" step="0.1"
+                        [value]="waypoint.pos.x" (input)="updateWaypointPos(i, 'x', $event)"
+                        class="w-full bg-gray-800 rounded p-2 text-sm"></div>
+                    <div><label class="text-xs text-gray-400">Y</label><input type="number" step="0.1"
+                        [value]="waypoint.pos.y" (input)="updateWaypointPos(i, 'y', $event)"
+                        class="w-full bg-gray-800 rounded p-2 text-sm"></div>
+                    <div><label class="text-xs text-gray-400">Z</label><input type="number" step="0.1"
+                        [value]="waypoint.pos.z" (input)="updateWaypointPos(i, 'z', $event)"
+                        class="w-full bg-gray-800 rounded p-2 text-sm"></div>
+                  </div>
+                </div>
+
+                @if (!last) {
+                <div class="my-1 text-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mx-auto text-gray-500" fill="none"
+                    viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 13l-7 7-7-7m14-8l-7 7-7-7" />
+                  </svg>
+                </div>
+                <div class="bg-gray-900/70 p-3 rounded-lg space-y-2">
+                  <div class="flex items-center space-x-2">
+                    <label class="text-xs text-cyan-300 w-24">{{ l.t('speed')() }}</label>
+                    <input type="number" step="0.1" min="0.1" [value]="pathSpeeds()[i]"
+                      (input)="updatePathSpeed(i, $event)" class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    <span class="text-xs text-gray-400">m/s</span>
+                  </div>
+                  <div class="flex items-center space-x-2">
+                    <label class="text-xs text-cyan-300 w-24">{{ l.t('duration')() }}</label>
+                    <input type="number" step="0.1" min="0.1" [value]="pathDurations()[i]"
+                      (input)="updatePathDuration(i, $event)"
+                      class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    <span class="text-xs text-gray-400">s</span>
+                  </div>
+                  @if (targetType() === 'Blade') {
+                  <div class="flex items-center space-x-2">
+                    <label class="text-xs text-cyan-300 w-24">{{ l.t('rotationSpeedSegment')() }}</label>
+                    <input type="number" step="10" min="0" [value]="pathRotationSpeeds()[i]"
+                      (input)="updatePathRotationSpeed(0, i, $event)"
+                      class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    <span class="text-xs text-gray-400">RPM</span>
+                  </div>
+                  }
+                  @if (targetType() === 'Drone') {
+                  <div class="grid grid-cols-2 gap-2 pt-2 border-t border-gray-600/50">
+                    <div class="flex items-center space-x-1">
+                      <label class="text-xs text-cyan-300 w-16">{{ l.t('propeller1')() }}</label>
+                      <input type="number" step="10" min="0" [value]="pathRotationSpeeds1()[i]"
+                        (input)="updatePathRotationSpeed(1, i, $event)"
+                        class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    </div>
+                    <div class="flex items-center space-x-1">
+                      <label class="text-xs text-cyan-300 w-16">{{ l.t('propeller2')() }}</label>
+                      <input type="number" step="10" min="0" [value]="pathRotationSpeeds2()[i]"
+                        (input)="updatePathRotationSpeed(2, i, $event)"
+                        class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    </div>
+                    <div class="flex items-center space-x-1">
+                      <label class="text-xs text-cyan-300 w-16">{{ l.t('propeller3')() }}</label>
+                      <input type="number" step="10" min="0" [value]="pathRotationSpeeds3()[i]"
+                        (input)="updatePathRotationSpeed(3, i, $event)"
+                        class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    </div>
+                    <div class="flex items-center space-x-1">
+                      <label class="text-xs text-cyan-300 w-16">{{ l.t('propeller4')() }}</label>
+                      <input type="number" step="10" min="0" [value]="pathRotationSpeeds4()[i]"
+                        (input)="updatePathRotationSpeed(4, i, $event)"
+                        class="w-full bg-gray-800 rounded p-1 text-sm text-center">
+                    </div>
+                  </div>
+                  }
+                </div>
+                <div class="my-1 text-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mx-auto text-gray-500" fill="none"
+                    viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 13l-7 7-7-7m14-8l-7 7-7-7" />
+                  </svg>
+                </div>
+                }
+                }
+              </div>
+
+              <button (click)="addWaypoint()"
+                class="w-full bg-cyan-800 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center text-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd"
+                    d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"
+                    clip-rule="evenodd" />
+                </svg>
+                {{ l.t('addWaypoint')() }}
+              </button>
+            </div>
+            }
+
+            @if (targetType() === 'Blade') {
+            <div class="space-y-4 pt-4 border-t border-gray-600/50">
+              <h3 class="text-md font-semibold text-cyan-300">{{ l.t('customBlade')() }}</h3>
+              <p class="text-xs text-gray-400">{{ l.t('customBladeDesc')() }}</p>
+              <p class="text-xs text-cyan-200 bg-cyan-900/50 p-2 rounded-md">{{ l.t('customBladeRealismDesc')() }}</p>
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <h4 class="font-medium text-center mb-1">{{ l.t('originalImage')() }}</h4>
+                  <div
+                    class="w-full aspect-square border-2 border-dashed border-gray-600 rounded-lg flex items-center justify-center bg-gray-900/50 relative cursor-pointer"
+                    (click)="fileInput.click()">
+                    @if (uploadedImageUrl()) {
+                    <img [src]="uploadedImageUrl()" alt="Uploaded Propeller"
+                      class="max-w-full max-h-full object-contain p-1" />
+                    } @else {
+                    <div class="text-center text-gray-400 p-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="mx-auto h-8 w-8" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      <p class="mt-1">{{ l.t('clickToUpload')() }}</p>
+                    </div>
+                    }
+                  </div>
+                </div>
+                <div>
+                  <h4 class="font-medium text-center mb-1">{{ l.t('extractedShape')() }}</h4>
+                  <div
+                    class="w-full aspect-square border-2 border-gray-600 rounded-lg flex items-center justify-center bg-gray-900/50 relative">
+                    @if (binarizedImageUrl()) {
+                    <img [src]="binarizedImageUrl()" alt="Binarized Propeller"
+                      class="max-w-full max-h-full object-contain p-1" />
+                    } @else {
+                    <div class="text-center text-gray-500 p-2">
+                      <p>{{ l.t('shapeWillAppear')() }}</p>
+                    </div>
+                    }
+                  </div>
+                </div>
+              </div>
+              <input type="file" #fileInput (change)="onFileSelected($event)" accept="image/*" class="hidden" />
+            </div>
+            }
+
+            @if (targetType() === 'Ball' || ((targetType() === 'Blade' || targetType() === 'Drone') && bladeMotionType()
+            === 'Fixed')) {
+            <div class="grid grid-cols-3 gap-2">
+              <div><label class="text-xs text-gray-400">{{ l.t('centerX')() }}</label><input type="number"
+                  [value]="initialPosX()" (input)="onNumberInput(initialPosX, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+              <div><label class="text-xs text-gray-400">{{ l.t('altitudeY')() }}</label><input type="number"
+                  [value]="initialPosY()" (input)="onNumberInput(initialPosY, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+              <div><label class="text-xs text-gray-400">{{ l.t('centerZ')() }}</label><input type="number"
+                  [value]="initialPosZ()" (input)="onNumberInput(initialPosZ, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            </div>
+            }
+
+            @if (targetType() === 'Ball' && ballMotionType() === 'Gravity') {
+            <div class="grid grid-cols-3 gap-2">
+              <div><label class="text-xs text-gray-400">{{ l.t('velX')() }}</label><input type="number"
+                  [value]="initialVelX()" (input)="onNumberInput(initialVelX, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+              <div><label class="text-xs text-gray-400">{{ l.t('velY')() }}</label><input type="number"
+                  [value]="initialVelY()" (input)="onNumberInput(initialVelY, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+              <div><label class="text-xs text-gray-400">{{ l.t('velZ')() }}</label><input type="number"
+                  [value]="initialVelZ()" (input)="onNumberInput(initialVelZ, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            </div>
+            <div><label class="text-sm">{{ l.t('restitution')() }}</label><input type="number" step="0.1" min="0"
+                max="1" [value]="restitution()" (input)="onNumberInput(restitution, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            }
+
+            <!-- Reflectivity Section -->
+            @if (targetType() === 'Drone') {
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-sm">{{ l.t('bodyReflectivity')() }}</label>
+                <input type="number" step="0.01" min="0" max="1" [value]="reflectivity()"
+                  (input)="onNumberInput(reflectivity, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+              </div>
+              <div>
+                <label class="text-sm">{{ l.t('propReflectivity')() }}</label>
+                <input type="number" step="0.01" min="0" max="1" [value]="propellerReflectivity()"
+                  (input)="onNumberInput(propellerReflectivity, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+              </div>
+            </div>
+            } @else {
+            <div>
+              <label class="text-sm">{{ l.t('reflectivity')() }}</label>
+              <input type="number" step="0.01" min="0" max="1" [value]="reflectivity()"
+                (input)="onNumberInput(reflectivity, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+            </div>
+            }
+
+            @if ((targetType() === 'Ball' && ballMotionType() === 'Rotation') || targetType() === 'Blade' ||
+            (targetType() === 'Drone' && bladeMotionType() !== 'Manual')) {
+            <div class="bg-gray-900/70 p-3 rounded-lg space-y-3">
+              <h4 class="text-sm font-semibold text-cyan-300">{{ l.t('dynamicModulation')() }}</h4>
+              @if (targetType() === 'Blade' || (targetType() === 'Ball' && ballMotionType() === 'Rotation')) {
+              <div>
+                <label class="text-sm">
+                  @if (targetType() === 'Blade') {
+                  {{ l.t('bladeLength')() }}
+                  } @else {
+                  {{ l.t('rotationRadius')() }}
+                  }
+                </label>
+                <input type="number" step="0.1" min="0" [value]="rotationRadius()"
+                  (input)="onNumberInput(rotationRadius, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+              </div>
+              }
+
+              @if (targetType() === 'Ball' && ballMotionType() === 'Rotation') {
+              <div>
+                <label class="text-sm">{{ l.t('rotationSpeed')() }}</label>
+                <input type="number" step="10" min="0" [value]="rotationSpeed()"
+                  (input)="onNumberInput(rotationSpeed, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+              </div>
+              }
+
+              @if ((targetType() === 'Blade' || targetType() === 'Drone') && bladeMotionType() === 'Fixed') {
+              <div class="space-y-2 border-t border-gray-600/50 pt-3 mt-3">
+                <h4 class="text-sm font-semibold text-cyan-300">{{ l.t('rotationSpeedPlanning')() }}</h4>
+                <p class="text-xs text-gray-400">{{ l.t('rotationSpeedPlanningDesc')() }}</p>
+
+                @if (targetType() === 'Blade') {
+                <div class="space-y-1 max-h-60 overflow-y-auto pr-2">
+                  @for (keyframe of rotationKeyframes(); track keyframe.id; let i = $index) {
+                  <div class="grid grid-cols-10 gap-2 items-center bg-gray-900/70 p-2 rounded-lg">
+                    <div class="col-span-4">
+                      <label class="text-xs text-gray-400 block">{{ l.t('time')() }} (s)</label>
+                      <input type="number" step="0.1" min="0" [value]="keyframe.time"
+                        (input)="updateRotationKeyframeTime(0, i, $event)"
+                        class="w-full bg-gray-800 rounded p-1 text-sm">
+                    </div>
+                    <div class="col-span-4">
+                      <label class="text-xs text-gray-400 block">{{ l.t('rpm')() }}</label>
+                      <input type="number" step="10" min="0" [value]="keyframe.rpm"
+                        (input)="updateRotationKeyframeRpm(0, i, $event)"
+                        class="w-full bg-gray-800 rounded p-1 text-sm">
+                    </div>
+                    <div class="col-span-2 text-right self-end">
+                      @if (rotationKeyframes().length > 2) {
+                      <button (click)="removeRotationKeyframe(0, i)"
+                        class="text-red-400 hover:text-red-300 text-xs font-semibold px-2 py-1 rounded hover:bg-red-900/50 transition-colors">{{
+                        l.t('remove')() }}</button>
+                      }
+                    </div>
+                  </div>
+                  }
+                </div>
+                <button (click)="addRotationKeyframe(0)"
+                  class="w-full bg-cyan-800 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center text-sm mt-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd"
+                      d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"
+                      clip-rule="evenodd" />
+                  </svg>
+                  {{ l.t('addRotationKeyframe')() }}
+                </button>
+                }
+                @if (targetType() === 'Drone') {
+                <div class="flex border-b border-gray-600">
+                  @for (prop of [1,2,3,4]; track prop) {
+                  <button class="flex-1 text-xs py-2 text-center border-b-2 transition-colors"
+                    (click)="activeKeyframeTab.set(prop)"
+                    [class]="activeKeyframeTab() === prop ? 'border-cyan-400 text-cyan-400' : 'border-transparent text-gray-400 hover:text-white'">
+                    {{ l.t('propeller' + prop)() }}
+                  </button>
+                  }
+                </div>
+                @for (prop of [1,2,3,4]; track prop) {
+                <div [hidden]="activeKeyframeTab() !== prop">
+                  @let keyframes = getRotationKeyframesForProp(prop);
+                  <div class="space-y-1 max-h-60 overflow-y-auto pr-2 mt-2">
+                    @for (keyframe of keyframes(); track keyframe.id; let i = $index) {
+                    <div class="grid grid-cols-10 gap-2 items-center bg-gray-900/70 p-2 rounded-lg">
+                      <div class="col-span-4">
+                        <label class="text-xs text-gray-400 block">{{ l.t('time')() }} (s)</label>
+                        <input type="number" step="0.1" min="0" [value]="keyframe.time"
+                          (input)="updateRotationKeyframeTime(prop, i, $event)"
+                          class="w-full bg-gray-800 rounded p-1 text-sm">
+                      </div>
+                      <div class="col-span-4">
+                        <label class="text-xs text-gray-400 block">{{ l.t('rpm')() }}</label>
+                        <input type="number" step="10" min="0" [value]="keyframe.rpm"
+                          (input)="updateRotationKeyframeRpm(prop, i, $event)"
+                          class="w-full bg-gray-800 rounded p-1 text-sm">
+                      </div>
+                      <div class="col-span-2 text-right self-end">
+                        @if (keyframes().length > 2) {
+                        <button (click)="removeRotationKeyframe(prop, i)"
+                          class="text-red-400 hover:text-red-300 text-xs font-semibold px-2 py-1 rounded hover:bg-red-900/50 transition-colors">{{
+                          l.t('remove')() }}</button>
+                        }
+                      </div>
+                    </div>
+                    }
+                  </div>
+                  <button (click)="addRotationKeyframe(prop)"
+                    class="w-full bg-cyan-800 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center text-sm mt-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20"
+                      fill="currentColor">
+                      <path fill-rule="evenodd"
+                        d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"
+                        clip-rule="evenodd" />
+                    </svg>
+                    {{ l.t('addRotationKeyframe')() }}
+                  </button>
+                </div>
+                }
+                }
+
+              </div>
+
+              }
+
+              @if (targetType() === 'Blade' || targetType() === 'Drone') {
+              <div class="mt-4 pt-4 border-t border-gray-600/50 space-y-3">
+                @if (targetType() === 'Drone') {
+                <div>
+                  <label class="text-sm">{{ l.t('droneScale')() }}</label>
+                  <div class="flex items-center space-x-2 mt-1">
+                    <input type="range" min="0.5" max="10" step="0.5" [value]="droneScale()"
+                      (input)="onNumberInput(droneScale, $event)"
+                      class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                    <span class="text-sm font-mono w-16 text-right">{{ droneScale() }}x</span>
+                  </div>
+                </div>
+                }
+                <div>
+                  <label class="text-sm">
+                    @if (targetType() === 'Drone') {
+                    {{ l.t('dronePitch')() }}
+                    } @else {
+                    {{ l.t('bladePitch')() }}
+                    }
+                  </label>
+                  <div class="flex items-center space-x-2 mt-1">
+                    <input type="range" min="-90" max="90" step="1" [value]="bladePitch()"
+                      (input)="onNumberInput(bladePitch, $event)"
+                      class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                    <span class="text-sm font-mono w-16 text-right">{{ bladePitch() }}°</span>
+                  </div>
+                </div>
+              </div>
+              }
+            </div>
+            }
+          </div>
+        </details>
+
+        <!-- Detector Settings -->
+        <details class="bg-gray-700/50 rounded-lg" [open]="detectorSettingsOpen()">
+          <summary (click)="$event.preventDefault(); detectorSettingsOpen.set(!detectorSettingsOpen())"
+            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
+            {{ l.t('detectorParams')() }}
+            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!detectorSettingsOpen()">▼</span>
+          </summary>
+          <div class="p-4 border-t border-gray-600 space-y-4">
+            <div>
+              <label class="text-sm mb-2 block">{{ l.t('detectorPreset')() }}</label>
+              <select [value]="selectedDetectorPresetId()" (change)="onDetectorPresetChange($event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm">
+                <option value="custom" [selected]="selectedDetectorPresetId() === 'custom'">{{ l.t('detectorPresetCustom')() }}</option>
+                @for (preset of detectorPresets; track preset.id) {
+                <option [value]="preset.id" [selected]="selectedDetectorPresetId() === preset.id">{{ preset.label }}</option>
+                }
+              </select>
+              @if (resolvedDetectorSettings()) {
+              <div class="mt-2 text-xs text-gray-300">
+                <div>{{ l.t('pdpAtWavelength')() }} <span class="font-mono text-cyan-200">{{ quantumEfficiency() | number:'1.3-4' }}</span></div>
+              </div>
+              }
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div><label class="text-xs text-gray-400">{{ l.t('resWidth')() }}</label><input type="number"
+                  [value]="resolutionW()" [disabled]="selectedDetectorPresetId() !== 'custom'" (input)="onNumberInput(resolutionW, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+              <div><label class="text-xs text-gray-400">{{ l.t('resHeight')() }}</label><input type="number"
+                  [value]="resolutionH()" [disabled]="selectedDetectorPresetId() !== 'custom'" (input)="onNumberInput(resolutionH, $event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            </div>
+            <div><label class="text-sm">{{ l.t('fov')() }}</label><input type="number" [value]="detectorFov()"
+                (input)="onNumberInput(detectorFov, $event)" class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div>
+              <label class="text-sm">{{ l.t('detectorYaw')() }}</label>
+              <div class="flex items-center space-x-2 mt-1">
+                <input type="range" min="-45" max="45" step="1" [value]="detectorYaw()"
+                  (input)="onNumberInput(detectorYaw, $event)"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                <span class="text-sm font-mono w-16 text-right">{{ detectorYaw() }}°</span>
+              </div>
+            </div>
+            <div>
+              <label class="text-sm">{{ l.t('detectorPitch')() }}</label>
+              <div class="flex items-center space-x-2 mt-1">
+                <input type="range" min="-45" max="45" step="1" [value]="detectorPitch()"
+                  (input)="onNumberInput(detectorPitch, $event)"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                <span class="text-sm font-mono w-16 text-right">{{ detectorPitch() }}°</span>
+              </div>
+            </div>
+            <div><label class="text-sm">{{ l.t('frameDuration')() }}</label><input type="number"
+                [value]="frameDurationUs()" (input)="onNumberInput(frameDurationUs, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div>
+              <label class="text-sm">{{ l.t('timeResolution')() }}</label>
+              <input type="number" [value]="timeResolutionPs()" [disabled]="selectedDetectorPresetId() !== 'custom'" (input)="onNumberInput(timeResolutionPs, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm">
+            </div>
+            <div>
+              <label class="text-sm">{{ l.t('tdcBitDepth')() }}</label>
+              <div class="flex items-center space-x-2 mt-1">
+                <input type="range" min="8" max="16" step="1" [value]="tdcBitDepth()" (input)="onBitDepthInput($event)"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+                <span class="text-sm font-mono w-16 text-right">{{ tdcBitDepth() }} {{ l.t('tdcBits')() }}</span>
+              </div>
+              <div class="flex items-center space-x-2 mt-2">
+                <label class="text-xs text-gray-400 flex-shrink-0">{{ l.t('tdcMaxCount')() }}</label>
+                <input type="number" [value]="tdcMaxCount()" (input)="onMaxCountInput($event)"
+                  class="w-full bg-gray-900 rounded p-2 text-sm text-right">
+              </div>
+            </div>
+            <div><label class="text-sm">{{ l.t('quantumEfficiency')() }}</label><input type="number" step="0.001"
+                [value]="quantumEfficiency()" [disabled]="selectedDetectorPresetId() !== 'custom'" (input)="onNumberInput(quantumEfficiency, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div><label class="text-sm">{{ l.t('apertureDiameter')() }}</label><input type="number" step="0.001"
+                [value]="apertureDiameter()" (input)="onNumberInput(apertureDiameter, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div><label class="text-sm">{{ l.t('systemEfficiency')() }}</label><input type="number" step="0.001"
+                [value]="systemEfficiency()" [disabled]="selectedDetectorPresetId() !== 'custom'" (input)="onNumberInput(systemEfficiency, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div><label class="text-sm">{{ l.t('filterBandwidth')() }}</label><input type="number"
+                [value]="filterBandwidth()" (input)="onNumberInput(filterBandwidth, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div><label class="text-sm">{{ l.t('darkCountRate')() }}</label><input type="number"
+                [value]="darkCountRate()" [disabled]="selectedDetectorPresetId() !== 'custom'" (input)="onNumberInput(darkCountRate, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div class="bg-gray-900/70 p-3 rounded-lg space-y-2">
+              <h4 class="text-sm font-semibold text-cyan-300">{{ l.t('calculatedValues')() }}</h4>
+              <div class="flex justify-between text-xs">
+                <span class="text-gray-400">{{ l.t('maxDistance')() }}</span>
+                <span class="font-mono">{{ maxMeasurableDistance() | number:'1.1-2' }} m</span>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- Environment & Laser -->
+        <details class="bg-gray-700/50 rounded-lg" [open]="envSettingsOpen()">
+          <summary (click)="$event.preventDefault(); envSettingsOpen.set(!envSettingsOpen())"
+            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
+            {{ l.t('envLaser')() }}
+            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!envSettingsOpen()">▼</span>
+          </summary>
+          <div class="p-4 border-t border-gray-600 space-y-4">
+            <div>
+              <label class="text-sm mb-2 block">环境场景 / Environment</label>
+              <div class="grid grid-cols-1 gap-2">
+                @for (preset of environmentPresets; track preset.id) {
+                <button (click)="selectedEnvironmentPresetId.set(preset.id)"
+                  [class]="selectedEnvironmentPresetId() === preset.id ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full text-left font-semibold py-2 px-3 rounded-lg transition-colors text-sm">
+                  <span>{{ preset.labelZh }}</span>
+                  <span class="block text-[11px] opacity-75">{{ preset.label }} · V {{ preset.visibilityKm }} km · Sun {{ preset.solarScale }}</span>
+                </button>
+                }
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between items-center">
+                <label class="text-sm">大气能见度 / Visibility</label>
+                <span class="text-xs text-gray-400">{{ atmosphericVisibilityKm() | number:'1.1-1' }} km</span>
+              </div>
+              <input type="range" min="0.5" max="60" step="0.5" [value]="atmosphericVisibilityKm()"
+                (input)="onNumberInput(atmosphericVisibilityKm, $event)"
+                class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+              <p class="text-[11px] text-gray-500 mt-1">能见度同时影响 Beer-Lambert 双程衰减、背景散射和 3D 大气雾化。</p>
+            </div>
+            <div>
+              <label class="text-sm mb-2 block">{{ l.t('laserMode')() }}</label>
+              <div class="grid grid-cols-2 gap-2">
+                <button (click)="laserMode.set('Pulsed')"
+                  [class]="laserMode() === 'Pulsed' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('laserModePulsed')() }}
+                </button>
+                <button (click)="laserMode.set('CW')"
+                  [class]="laserMode() === 'CW' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('laserModeCW')() }}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label class="text-sm">{{ l.t('solarIrradiance')() }}</label>
+              <input type="number" step="0.001" min="0" [value]="solarIrradiance()"
+                [disabled]="selectedDetectorPresetId() !== 'custom'"
+                (input)="onNumberInput(solarIrradiance, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+            </div>
+            <div class="flex items-center justify-between">
+              <label class="text-sm">{{ l.t('atmosphericAttenuation')() }}</label>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" [checked]="atmosphericAttenuationEnabled()"
+                  (change)="atmosphericAttenuationEnabled.set($any($event.target).checked)" class="sr-only peer">
+                <div
+                  class="w-11 h-6 bg-gray-600 rounded-full peer peer-focus:ring-2 peer-focus:ring-cyan-500 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600">
+                </div>
+              </label>
+            </div>
+            <div>
+              <label class="text-sm">{{ l.t('laserWavelength')() }}</label>
+              <input type="range" min="400" max="1600" step="10" [value]="laserWavelengthNm()"
+                (input)="onNumberInput(laserWavelengthNm, $event)"
+                class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+              <span class="text-xs text-gray-400">{{ laserWavelengthNm() }} nm</span>
+            </div>
+            <div>
+              <label class="text-sm">{{ l.t('laserAvgPower')() }}</label>
+              <input type="range" min="0.01" max="3" step="0.01" [value]="laserAveragePower()"
+                (input)="onNumberInput(laserAveragePower, $event)"
+                class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+              <span class="text-xs text-gray-400">{{ laserAveragePower() }} W</span>
+            </div>
+            <div [class]="!isPulsedMode() ? 'opacity-50' : ''">
+              <label class="text-sm">{{ l.t('pulseWidth')() }}</label>
+              <input type="range" min="1" max="3000" step="1" [value]="laserPulseWidthNs()"
+                (input)="onNumberInput(laserPulseWidthNs, $event)"
+                class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer" [disabled]="!isPulsedMode()">
+              <span class="text-xs text-gray-400">{{ laserPulseWidthNs() | number:'1.0-0' }} ns</span>
+            </div>
+            <div [class]="!isPulsedMode() ? 'opacity-50' : ''">
+              <div class="flex justify-between items-center">
+                <label class="text-sm">{{ l.t('repetitionFreq')() }}</label>
+                <span class="text-xs text-gray-400">{{ formatFrequency(laserRepetitionFrequency()) }}</span>
+              </div>
+              <div class="flex items-center space-x-2 mt-1">
+                <input type="range" min="100" max="1000000" step="100" [value]="laserRepetitionFrequency()"
+                  (input)="onNumberInput(laserRepetitionFrequency, $event)"
+                  class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer" [disabled]="!isPulsedMode()">
+                <input type="number" min="100" max="1000000" [value]="laserRepetitionFrequency()"
+                  (input)="onNumberInput(laserRepetitionFrequency, $event)"
+                  class="w-28 bg-gray-900 rounded p-2 text-sm text-right" [disabled]="!isPulsedMode()">
+              </div>
+            </div>
+            <div class="bg-gray-900/70 p-3 rounded-lg space-y-2">
+              <h4 class="text-sm font-semibold text-cyan-300">{{ l.t('calculatedValues')() }}</h4>
+              @if(isPulsedMode()) {
+              <div class="flex justify-between text-xs">
+                <span class="text-gray-400">{{ l.t('pulseEnergy')() }}</span>
+                <span class="font-mono">{{ laserSinglePulseEnergyMicroJoules() | number:'1.2-3' }} µJ</span>
+              </div>
+              <div class="flex justify-between text-xs">
+                <span class="text-gray-400">{{ l.t('distanceResolution')() }}</span>
+                <span class="font-mono">{{ distanceResolution() | number:'1.2-4' }} m</span>
+              </div>
+              <div class="flex justify-between text-xs">
+                <span class="text-gray-400">{{ l.t('peakPower')() }}</span>
+                <span class="font-mono">{{ formatPeakPower(laserPeakPower()) }}</span>
+              </div>
+              } @else {
+              <div class="flex justify-between text-xs">
+                <span class="text-gray-400">{{ l.t('cwMode')() }}</span>
+                <span class="font-mono">{{ l.t('cwModeText')() }}</span>
+              </div>
+              }
+            </div>
+          </div>
+        </details>
+
+        <!-- Simulation Settings -->
+        <details class="bg-gray-700/50 rounded-lg" [open]="simSettingsOpen()">
+          <summary (click)="$event.preventDefault(); simSettingsOpen.set(!simSettingsOpen())"
+            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
+            {{ l.t('simSettings')() }}
+            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!simSettingsOpen()">▼</span>
+          </summary>
+          <div class="p-4 border-t border-gray-600 space-y-4">
+            <div><label class="text-sm">{{ l.t('nFrames')() }}</label><input type="number" [value]="nFrames()"
+                (input)="onNumberInput(nFrames, $event)" class="w-full bg-gray-900 rounded p-2 text-sm"></div>
+            <div class="rounded border p-3 text-xs space-y-2" [class]="simulationBudgetStatus().class">
+              <div class="flex justify-between gap-3">
+                <span>{{ l.t('runtimeBudget')() }}</span>
+                <span class="font-mono">{{ simulationBudget().datasetMb | number:'1.1-1' }} MB</span>
+              </div>
+              <div class="flex justify-between gap-3">
+                <span>{{ l.t('workingSet')() }}</span>
+                <span class="font-mono">{{ simulationBudget().estimatedWorkingSetMb | number:'1.1-1' }} MB</span>
+              </div>
+              <p>{{ simulationBudgetMessage() }}</p>
+              @if (simulationBudget().level !== 'safe') {
+                <p>{{ l.t('recommendedFrames')() }}: <span class="font-mono">{{ recommendedFrames() | number }}</span></p>
+              }
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <!-- Resize Handle -->
+    <div
+      class="w-1.5 h-full cursor-col-resize hover:bg-cyan-500 bg-gray-900/30 flex-shrink-0 hidden lg:block transition-colors"
+      (mousedown)="startResize($event)"></div>
+  </aside>
+
+  <!-- Backdrop for mobile -->
+  @if (isPanelOpen()) {
+  <div (click)="isPanelOpen.set(false)" class="absolute inset-0 bg-black/50 z-20 lg:hidden"></div>
+  }
+
+  <!-- 3D Viewport -->
+  <main #canvasContainer class="flex-grow h-full relative">
+    <canvas #rendererCanvas class="w-full h-full block"></canvas>
+
+    <!-- Hamburger Menu for Mobile -->
+    <button (click)="isPanelOpen.set(true)"
+      class="absolute top-4 left-4 bg-gray-800/70 p-2 rounded-md text-white z-10 lg:hidden">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
+      </svg>
+    </button>
+
+    <div
+      class="absolute top-4 left-20 right-4 lg:left-4 bg-gray-950/75 border border-cyan-700/40 rounded-md px-3 py-2 text-xs pointer-events-none backdrop-blur">
+      <div class="grid gap-2 md:grid-cols-2 2xl:grid-cols-4">
+        <div>
+          <p class="text-gray-400">{{ l.t('activeDrone')() }}</p>
+          <p class="font-semibold text-cyan-200 truncate">{{ selectedDronePreset().model }}</p>
+        </div>
+        <div>
+          <p class="text-gray-400">{{ l.t('dronePosition')() }}</p>
+          <p class="font-mono text-gray-100">X {{ activeDronePosition().x | number:'1.1-1' }} / Y {{ activeDronePosition().y | number:'1.1-1' }} / Z {{ activeDronePosition().z | number:'1.1-1' }}</p>
+        </div>
+        <div>
+          <p class="text-gray-400">{{ l.t('laserVisual')() }}</p>
+          <p class="font-mono text-gray-100"><span class="inline-block h-2.5 w-2.5 rounded-full mr-1"
+              [style.background]="laserCssColor()"></span>{{ laserWavelengthNm() }} nm</p>
+        </div>
+        <div>
+          <p class="text-gray-400">{{ l.t('telescopeModel')() }}</p>
+          <p class="font-mono text-gray-100">D {{ apertureDiameter() | number:'1.3-3' }} m / FOV {{ detectorFov() }}° / f {{ telescopeFocalLength() | number:'1.2-2' }} m</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Combined Detector View & Controls -->
+    <div class="absolute bottom-4 left-4 flex flex-col-reverse gap-2 items-start pointer-events-none">
+      <!-- Controls Info -->
+      <div class="bg-gray-900/50 p-2 rounded-lg text-xs">
+        <p><strong>{{ l.t('controlsTitle')() }}</strong> {{ bladeMotionType() === 'Manual' && targetType() === 'Drone' ? l.t('manualControlsInfo')() : l.t('controlsInfo')() }}</p>
+      </div>
+      <!-- Detector View Frame -->
+      <div #detectorViewport class="relative h-[22.22vh] border-2 border-cyan-500/50 rounded-md bg-black/30"
+        [style.aspect-ratio]="resolutionW() / resolutionH()">
+        <p class="absolute top-1 left-2 text-xs text-cyan-400 font-semibold">{{ l.t('detectorView')() }}</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Results Modal -->
+  @if (showResultsModal()) {
+  <div class="absolute inset-0 bg-black/60 flex items-center justify-center p-4 z-40"
+    (click)="showResultsModal.set(false)">
+    <div (click)="$event.stopPropagation()"
+      class="bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl text-gray-200 max-h-[90vh] overflow-y-auto">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-2xl font-bold text-cyan-400">{{ l.t('resultsTitle')() }}</h2>
+        <button (click)="showResultsModal.set(false)"
+          class="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
+      </div>
+
+      @if (backendSummary()) {
+      <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-center">
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('backendMode')() }}</p>
+          <p class="text-2xl font-semibold text-cyan-300">{{ backendSummary()?.sample_backend | uppercase }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('observedCounts')() }}</p>
+          <p class="text-2xl font-semibold text-green-400">{{ backendSummary()?.observed_total_counts | number }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('snrDb')() }}</p>
+          <p class="text-2xl font-semibold text-blue-400">{{ backendSummary()?.snr_db | number:'1.1-2' }} dB</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('deadTimeLoss')() }}</p>
+          <p class="text-2xl font-semibold text-yellow-400">{{ backendSummary()?.dead_time_loss_ratio | percent:'1.1-1' }}</p>
+        </div>
+      </div>
+      <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-sm">
+        <div>{{ l.t('signalPhotons')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.total_signal_photons | number:'1.0-0' }}</span></div>
+        <div>{{ l.t('backgroundPhotons')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.total_background_photons | number:'1.0-0' }}</span></div>
+        <div>{{ l.t('visibilityRatio')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.visibility_ratio | percent:'1.1-1' }}</span></div>
+        <div>{{ l.t('sampleRate')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.sample_rate_hz | number:'1.0-0' }} Hz</span></div>
+      </div>
+      }
+      @if (!backendSummary()) {
+      <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-center">
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('detectedPhotons')() }}</p>
+          <p class="text-2xl font-semibold text-green-400">{{ simulationResult()?.detectedPhotons | number }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('noisePhotons')() }}</p>
+          <p class="text-2xl font-semibold text-yellow-400">{{ simulationResult()?.noiseEvents | number }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('incidentPhotons')() }}</p>
+          <p class="text-2xl font-semibold text-blue-400">{{ simulationResult()?.incidentPhotons | number:'1.0-0' }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-gray-400">{{ l.t('peakPileup')() }}</p>
+          <div class="text-xl font-semibold" [class]="pileUpStatus().class">
+            <span>{{ pileUpFactor() | number:'1.3-3' }}</span>
+            <span class="text-sm ml-1"> ({{ l.t(pileUpStatus().textKey)() }})</span>
+          </div>
+        </div>
+      </div>
+      }
+
+      @if (backendError()) {
+      <div class="bg-yellow-950/40 border border-yellow-700/50 text-yellow-100 p-3 rounded-lg mb-4 text-sm">
+        {{ backendError() }}
+      </div>
+      }
+
+      @if (simulationResult()) {
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div class="text-center">
+          <h3 class="font-semibold mb-2">{{ l.t('photonCounting')() }}</h3>
+          <canvas #photonCountingCanvas class="w-full h-auto aspect-square border border-gray-600 rounded"
+            style="image-rendering: pixelated;"></canvas>
+        </div>
+        <div class="text-center">
+          <h3 class="font-semibold mb-2">{{ l.t('groundTruth')() }}</h3>
+          <canvas #groundTruthCanvas class="w-full h-auto aspect-square border border-gray-600 rounded"
+            style="image-rendering: pixelated;"></canvas>
+        </div>
+        <div class="text-center">
+          <h3 class="font-semibold mb-2">{{ l.t('incidentPhotonsCanvas')() }}</h3>
+          <canvas #incidentPhotonsCanvas class="w-full h-auto aspect-square border border-gray-600 rounded"
+            style="image-rendering: pixelated;"></canvas>
+        </div>
+      </div>
+      }
+    </div>
+  </div>
+  }
+</div>

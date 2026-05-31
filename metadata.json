@@ -1,0 +1,5 @@
+{
+  "name": "SPAD Detector Simulator",
+  "description": "A desktop SPAD active-imaging simulation platform for UAV target scenes, detector parameter studies, backend photon-count generation, and 3D result visualization.",
+  "requestFramePermissions": []
+}
