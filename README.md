@@ -5,6 +5,7 @@
 **A research-oriented single-photon active-imaging simulation platform for ball, propeller, and UAV scenes**
 
 [![Verify](https://github.com/hansamar/spad-detector/actions/workflows/verify.yml/badge.svg)](https://github.com/hansamar/spad-detector/actions/workflows/verify.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Angular](https://img.shields.io/badge/Angular-21-DD0031?logo=angular)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi)
 ![CUDA](https://img.shields.io/badge/CUDA-optional_acceleration-76B900?logo=nvidia)
@@ -206,13 +207,22 @@ npm run desktop:dist
 
 ## Citation
 
-Until a versioned release or DOI is published, cite the repository URL and the exact Git commit used for an experiment:
+Until a DOI is published, cite the repository release, URL, and exact Git
+commit used for an experiment:
 
 ```text
 SPAD Detector: single-photon active-imaging simulation platform.
 https://github.com/hansamar/spad-detector
 ```
 
+## Open-Source Project Information
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
+  request.
+- See [ROADMAP.md](ROADMAP.md) for planned validation and reproducibility work.
+- See [CHANGELOG.md](CHANGELOG.md) for release history.
+- See [SECURITY.md](SECURITY.md) for responsible vulnerability reporting.
+
 ## License
 
-This public repository does not currently include an open-source license. The source is publicly visible for research evaluation; reuse, modification, and redistribution permissions have not yet been granted.
+SPAD Detector is available under the [MIT License](LICENSE).
