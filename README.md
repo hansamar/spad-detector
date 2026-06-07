@@ -13,6 +13,8 @@
 
 </div>
 
+[**English**](README.md) | [**中文**](README_zh.md)
+
 > **中文摘要**<br>
 > SPAD Detector 是面向单光子主动成像研究的仿真平台。平台支持网球类球体、螺旋桨叶片和四旋翼无人机目标，提供 PF32 SPAD 阵列参数联动、太阳辐照度驱动的场景杂散光子、暗计数、死时间、视场裁剪、轨迹记录、CPU/CUDA 后端以及 Electron 桌面端。仓库包含可复现的验证脚本和 GitHub Actions 工作流。
 
