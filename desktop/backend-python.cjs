@@ -126,15 +126,23 @@ async function selectBackendPython(options = {}) {
   const appRoot = options.appRoot || path.resolve(__dirname, '..');
   const candidates = pythonCandidates(appRoot).filter(isRunnableCandidate);
   const probes = [];
+  let fallbackProbe = null;
   for (const candidate of candidates) {
-    probes.push(await probePython(candidate));
+    const probe = await probePython(candidate);
+    probes.push(probe);
+    if (probe.runnable && fallbackProbe === null) {
+      fallbackProbe = probe;
+    }
+    if (probe.runnable && probe.cuda_available) {
+      return {
+        selected: probe,
+        probes,
+      };
+    }
   }
-  const cudaProbe = probes.find((probe) => probe.runnable && probe.cuda_available);
-  const fallbackProbe = probes.find((probe) => probe.runnable);
-  const selected = cudaProbe || fallbackProbe || null;
 
   return {
-    selected,
+    selected: fallbackProbe,
     probes,
   };
 }
