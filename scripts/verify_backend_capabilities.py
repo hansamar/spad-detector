@@ -42,7 +42,7 @@ def main() -> None:
     )
     assert too_large.status_code == 422
 
-    hundred_k_params, _scenario = params_from_request(
+    hundred_k_params = params_from_request(
         SimulateRequest(
             detector_preset="pf32",
             observation_time_s=2.0,
@@ -52,7 +52,7 @@ def main() -> None:
         )
     )
     assert int(round(hundred_k_params.observation_time_s * hundred_k_params.sample_rate_hz)) == 100_000
-    two_hundred_k_params, _scenario = params_from_request(
+    two_hundred_k_params = params_from_request(
         SimulateRequest(
             detector_preset="pf32",
             observation_time_s=4.0,
@@ -76,7 +76,7 @@ def main() -> None:
     )
     assert bad_trajectory.status_code == 422
 
-    spectral_params, _ = params_from_request(
+    spectral_params = params_from_request(
         SimulateRequest(
             wavelength_nm=850,
             observation_time_s=0.2,
@@ -87,7 +87,7 @@ def main() -> None:
     assert np.isclose(spectral_params.optical.quantum_efficiency, float(pf32_pdp_fraction(850)))
     assert np.isclose(spectral_params.target.solar_irradiance_w_m2_nm, float(am0_solar_irradiance_w_m2_nm(850)))
 
-    override_params, _ = params_from_request(
+    override_params = params_from_request(
         SimulateRequest(
             wavelength_nm=850,
             quantum_efficiency=0.123,
@@ -100,7 +100,7 @@ def main() -> None:
     assert np.isclose(override_params.optical.quantum_efficiency, 0.123)
     assert np.isclose(override_params.target.solar_irradiance_w_m2_nm, 0.456)
 
-    scene_params, _ = params_from_request(
+    scene_params = params_from_request(
         SimulateRequest(
             target_position_x_m=10,
             target_position_y_m=20,
@@ -122,7 +122,7 @@ def main() -> None:
     assert np.isclose(scene_params.target.spin_axis_azimuth_deg, 17)
     assert np.isclose(scene_params.target.phase1, np.deg2rad(23))
 
-    recorded_params, _ = params_from_request(
+    recorded_params = params_from_request(
         SimulateRequest(
             detector_preset="pf32",
             observation_time_s=0.2,

@@ -56,7 +56,7 @@ def _base_request(**overrides):
 
 
 def _params(**overrides):
-    params, _scenario = params_from_request(_base_request(**overrides))
+    params = params_from_request(_base_request(**overrides))
     return params
 
 
@@ -92,10 +92,9 @@ def test_scene_stray_background_has_stationary_floor_without_space_terms() -> No
     t = np.linspace(0, 0.04, 4)
     phase = np.zeros_like(t)
     los = np.tile(np.array([[0.0, 0.0, 1.0]]), (4, 1))
-    total, scene_stray = _background_series(t, phase, los, params)
-    assert np.all(total > 0)
-    assert float(np.mean(total)) >= 7.0
-    assert np.allclose(total, scene_stray)
+    bg = _background_series(t, phase, los, params)
+    assert np.all(bg > 0)
+    assert float(np.mean(bg)) >= 7.0
 
 
 def test_background_spatial_map_stays_positive_after_large_gradients() -> None:
@@ -110,7 +109,7 @@ def test_recorded_trajectory_uses_circular_detector_fov() -> None:
     x_m = float(np.tan(angle_rad) * z_m)
     ground_range_m = float(np.hypot(x_m, z_m))
     y_m = float(np.tan(angle_rad) * ground_range_m)
-    params, _scenario = params_from_request(
+    params = params_from_request(
         _base_request(
             observation_time_s=0.02,
             target_trajectory_times_s=[0.0, 0.02],
@@ -126,7 +125,7 @@ def test_recorded_trajectory_uses_circular_detector_fov() -> None:
 
 
 def test_event_output_matches_sampled_frame_counts() -> None:
-    params, _scenario = params_from_request(
+    params = params_from_request(
         _base_request(
             output_mode="event",
             observation_time_s=0.2,
@@ -425,9 +424,9 @@ def test_response_carries_backend_expected_signal_map() -> None:
         target_pitch_deg=20,
         observation_time_s=0.02,
     )
-    params, scenario = params_from_request(req)
+    params = params_from_request(req)
     result = simulate_active_spad(params)
-    response = result_to_response(result, scenario)
+    response = result_to_response(result, None)
     assert response.expected_signal_map_encoded is not None, "backend response missing expected signal map"
     assert result["expected_signal_map"].shape == (32, 32)
     assert float(np.sum(result["expected_signal_map"])) > 0
@@ -441,7 +440,7 @@ def test_default_python_scene_uses_near_range_target_budget() -> None:
         roi_h=32,
         seed=9,
     )
-    params, _scenario = params_from_request(req)
+    params = params_from_request(req)
     assert 1.0 <= params.target.target_range_m <= 10.0
     assert np.isclose(params.target.reference_range_m, params.target.target_range_m)
     assert np.isclose(params.target.target_area_m2, 0.025)
