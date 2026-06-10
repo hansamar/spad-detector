@@ -1,5 +1,16 @@
 import numpy as np
 
+_torch = None
+
+
+def _get_torch():
+    """惰性导入 torch，仅在首次需要时加载。"""
+    global _torch
+    if _torch is None:
+        import torch
+        _torch = torch
+    return _torch
+
 
 def make_pde_map(rng, roi_h, roi_w, sigma=0.05, hot_pixel_fraction=0.01, hot_pixel_scale=5.0):
     """生成探测器效率(PDE)分布图，包含不均匀性和热像元
@@ -109,15 +120,14 @@ def sample_poisson_counts(mu, rng):
 
 def _cuda_available():
     try:
-        import torch  # type: ignore
-
+        torch = _get_torch()
         return bool(torch.cuda.is_available())
     except Exception:
         return False
 
 
 def _sample_poisson_counts_cuda(mu, seed):
-    import torch  # type: ignore
+    torch = _get_torch()
 
     mu_cpu = np.asarray(mu, dtype=np.float32)
     mu_t = torch.as_tensor(np.maximum(mu_cpu, 0.0), device="cuda")

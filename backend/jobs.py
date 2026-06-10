@@ -81,7 +81,9 @@ def get_simulation_job_artifact(job_id: str) -> Path | None:
 
 def _set_status(job_id: str, **updates) -> None:
     with _lock:
-        record = _jobs[job_id]
+        record = _jobs.get(job_id)
+        if record is None:
+            return
         record.update(updates)
         record["updated_at"] = _now()
 
@@ -89,21 +91,24 @@ def _set_status(job_id: str, **updates) -> None:
 def _run_job(job_id: str, req: SimulateRequest) -> None:
     _set_status(job_id, status="running")
     try:
-        params, scenario_info = params_from_request(req)
+        params = params_from_request(req)
         result = simulate_active_spad(params)
-        result["scenario_id"] = None
-        summary = result_to_summary_response(result, scenario_info)
+        summary = result_to_summary_response(result, None)
 
         with _lock:
             record = _jobs[job_id]
             artifact_path = record["artifact_path"]
             summary_path = record["summary_path"]
 
-        np.asarray(result["counts"], dtype=np.uint16).tofile(artifact_path)
-        Path(summary_path).write_text(
-            json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        try:
+            np.asarray(result["counts"], dtype=np.uint16).tofile(artifact_path)
+            Path(summary_path).write_text(
+                json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            _set_status(job_id, status="failed", error=f"写入产物文件失败: {exc}")
+            return
         _set_status(job_id, status="completed", summary=summary, result=None, error=None)
     except Exception as exc:
         _set_status(job_id, status="failed", error=str(exc))

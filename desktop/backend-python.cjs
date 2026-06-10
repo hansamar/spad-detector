@@ -51,7 +51,7 @@ function probePython(candidate) {
   const result = spawnSync(
     commandInfo.command,
     [...commandInfo.argsPrefix, '-c', probeCode],
-    { encoding: 'utf8', timeout: 60000 },
+    { encoding: 'utf8', timeout: 10000 },
   );
 
   if (result.error || result.status !== 0) {

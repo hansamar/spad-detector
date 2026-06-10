@@ -22,11 +22,14 @@ function resolveAppRoot() {
 
 function findBackendPython() {
   const selection = selectBackendPython({ appRoot: resolveAppRoot() });
-  if (selection.selected?.cuda_available) {
+  if (!selection.selected) {
+    return { notFound: true };
+  }
+  if (selection.selected.cuda_available) {
     return selection.selected;
   }
   if (process.env.SPAD_REQUIRE_CUDA !== '0') {
-    return null;
+    return { noCuda: true };
   }
   return selection.selected;
 }
@@ -74,7 +77,14 @@ async function startBackend() {
 
   const root = resolveAppRoot();
   const python = findBackendPython();
-  if (!python) {
+  if (python.notFound) {
+    dialog.showErrorBox(
+      '未找到可用的 Python 环境',
+      '无法找到可运行的 Python。请安装 Python 3.10+ 并通过 pip install -r requirements.txt 安装依赖，或设置 SPAD_PYTHON_EXE 环境变量指向你的 Python 可执行文件。',
+    );
+    return;
+  }
+  if (python.noCuda) {
     dialog.showErrorBox(
       'SPAD backend requires CUDA',
       'No CUDA-capable Python environment was found. Set SPAD_PYTHON_EXE to a Python with torch+CUDA, or set SPAD_REQUIRE_CUDA=0 to allow CPU fallback.',

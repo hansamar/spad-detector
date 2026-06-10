@@ -7,6 +7,8 @@
 import base64
 import numpy as np
 
+_ALLOWED_DTYPES = frozenset({"float32", "float64", "int32", "int64", "uint16", "uint8", "bool"})
+
 
 def encode_array(arr: np.ndarray) -> str:
     """将 numpy 数组编码为自描述 Base64 字符串"""
@@ -24,6 +26,8 @@ def decode_array(s: str) -> np.ndarray:
         raise ValueError(f"无效的数组编码格式，期望 'dtype|shape|data'，得到: {s[:80]}...")
     dtype_str, shape_str, b64_str = parts
     dtype = np.dtype(dtype_str)
+    if dtype_str not in _ALLOWED_DTYPES:
+        raise ValueError(f"不支持的 dtype: {dtype_str}，允许的类型: {sorted(_ALLOWED_DTYPES)}")
     # 解析 shape: "(20000,16,16)" -> (20000, 16, 16)
     shape = tuple(int(x) for x in shape_str.strip("()").split(",") if x.strip())
     raw = base64.b64decode(b64_str)

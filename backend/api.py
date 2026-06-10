@@ -21,9 +21,8 @@ async def get_capabilities():
 @router.post("/simulate", response_model=SimulateResponse)
 async def run_simulation(req: SimulateRequest):
     try:
-        params, _scenario_info = params_from_request(req)
+        params = params_from_request(req)
         result = await run_in_threadpool(simulate_active_spad, params)
-        result["scenario_id"] = None
         return result_to_response(result, None)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -32,9 +31,8 @@ async def run_simulation(req: SimulateRequest):
 @router.post("/simulate/summary", response_model=SimulateSummaryResponse)
 async def run_simulation_summary(req: SimulateRequest):
     try:
-        params, _scenario_info = params_from_request(req)
+        params = params_from_request(req)
         result = await run_in_threadpool(simulate_active_spad, params)
-        result["scenario_id"] = None
         return result_to_summary_response(result, None)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

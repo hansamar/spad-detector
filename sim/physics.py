@@ -170,9 +170,17 @@ def effective_laser_average_power_w(
     laser_pulse_energy_j: float,
     laser_repetition_frequency_hz: float,
 ) -> float:
-    """Return transmitter average power for CW or pulsed operation."""
+    """返回发射机平均功率（CW 或脉冲模式）。
+
+    脉冲模式下优先使用 pulse_energy × rep_rate；若 pulse_energy 为零则从
+    laser_average_power_w 回退推导，避免用户同时设置两者时的静默忽略。
+    """
     if str(laser_mode or "").lower() == "pulsed":
-        return max(float(laser_pulse_energy_j), 0.0) * max(float(laser_repetition_frequency_hz), 0.0)
+        pulse_energy = float(laser_pulse_energy_j)
+        rep_rate = max(float(laser_repetition_frequency_hz), 0.0)
+        if pulse_energy > 0:
+            return pulse_energy * rep_rate
+        return max(float(laser_average_power_w), 0.0)
     return max(float(laser_average_power_w), 0.0)
 
 

@@ -218,10 +218,9 @@ def _apply_recorded_trajectory(req: SimulateRequest, params: SimParams) -> None:
         ).astype(np.float64)
 
 
-def params_from_request(req: SimulateRequest) -> tuple[SimParams, dict | None]:
+def params_from_request(req: SimulateRequest) -> SimParams:
     """Convert a frontend request into simulator parameters."""
 
-    scenario_info = None
     params = SimParams()
     apply_detector_preset(params, req.detector_preset)
 
@@ -315,7 +314,7 @@ def params_from_request(req: SimulateRequest) -> tuple[SimParams, dict | None]:
         ),
     )
 
-    return params, scenario_info
+    return params
 
 
 def result_to_response(

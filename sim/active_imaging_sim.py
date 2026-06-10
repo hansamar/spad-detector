@@ -1141,7 +1141,8 @@ def simulate_active_spad(params: SimParams):
     )
 
     if params.spad.afterpulse_probability > 0:
-        afterpulse = rng.poisson(mu_corrected * params.spad.afterpulse_probability)
+        # 后脉冲概率应基于死时间校正前的理想光子数，避免在近饱和时低估
+        afterpulse = rng.poisson(mu_total * params.spad.afterpulse_probability)
         counts = counts + afterpulse
     if params.spad.crosstalk_probability > 0:
         shifted = np.zeros_like(counts)
