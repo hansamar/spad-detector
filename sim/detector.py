@@ -12,7 +12,7 @@ def _get_torch():
     return _torch
 
 
-def make_pde_map(rng, roi_h, roi_w, sigma=0.05, hot_pixel_fraction=0.01, hot_pixel_scale=5.0):
+def make_pde_map(rng: np.random.Generator, roi_h: int, roi_w: int, sigma: float = 0.05, hot_pixel_fraction: float = 0.01, hot_pixel_scale: float = 5.0) -> np.ndarray:
     """生成探测器效率(PDE)分布图，包含不均匀性和热像元
 
     Args:
@@ -40,8 +40,8 @@ def make_pde_map(rng, roi_h, roi_w, sigma=0.05, hot_pixel_fraction=0.01, hot_pix
     return pde_map
 
 
-def make_dark_map(rng, roi_h, roi_w, base_rate_cps, sigma_frac=0.1,
-                  hot_pixel_fraction=0.01, hot_pixel_scale=5.0):
+def make_dark_map(rng: np.random.Generator, roi_h: int, roi_w: int, base_rate_cps: float, sigma_frac: float = 0.1,
+                  hot_pixel_fraction: float = 0.01, hot_pixel_scale: float = 5.0) -> np.ndarray:
     """生成每像素的暗计数率分布图
 
     Args:

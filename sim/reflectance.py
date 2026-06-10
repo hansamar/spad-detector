@@ -71,7 +71,7 @@ def lambert_face_flux(
     P_recv = ((rho * solar_irradiance / np.pi)
               * area
               * filter_bw_nm
-              * (aperture_area_m2 / range_m ** 2)
+              * (aperture_area_m2 / np.maximum(range_m, 1.0) ** 2)
               * phase_function_scale
               * cos_i * cos_o)
 

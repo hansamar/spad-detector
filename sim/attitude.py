@@ -1,17 +1,5 @@
 import numpy as np
 
-
-def rotation_matrix_axis_angle(axis_3d, angle_rad):
-    k = axis_3d / np.linalg.norm(axis_3d)
-    K = np.array([
-        [0, -k[2], k[1]],
-        [k[2], 0, -k[0]],
-        [-k[1], k[0], 0],
-    ])
-    I = np.eye(3)
-    return I * np.cos(angle_rad) + (1 - np.cos(angle_rad)) * np.outer(k, k) + np.sin(angle_rad) * K
-
-
 def spin_rotation_matrix(t, spin_hz, axis_3d, phase0=0.0):
     k = axis_3d / np.linalg.norm(axis_3d)
     K = np.array([

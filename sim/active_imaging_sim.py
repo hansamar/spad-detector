@@ -371,7 +371,11 @@ def _background_series(
     phase_angle_t: np.ndarray,
     los_unit_t: np.ndarray,
     params: SimParams,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
+    """返回场景杂散光背景时间序列 (cps/pixel)。
+
+    综合了时间漂移和太阳相位角几何因子，两者作用于同一基底速率。
+    """
     drift = 1.0 + params.background.temporal_drift_depth * np.cos(
         2.0 * np.pi * params.background.temporal_drift_hz * t + 0.5
     )
@@ -379,8 +383,7 @@ def _background_series(
     scene_rate = np.full_like(t, params.background.scene_stray_rate_cps_per_pixel, dtype=np.float64)
     solar_elongation = np.clip(np.cos(phase_angle_t), -1.0, 1.0)
     geometry = 0.35 + 0.65 * np.clip(0.5 + 0.5 * solar_elongation, 0.0, 1.0)
-    scene_stray = scene_rate * geometry * drift
-    return scene_stray, scene_stray
+    return (scene_rate * geometry * drift).astype(np.float64)
 
 
 def _background_scaling(params: SimParams, pixel_ifov_urad: float) -> float:
@@ -391,7 +394,11 @@ def _background_scaling(params: SimParams, pixel_ifov_urad: float) -> float:
 
 
 def _shot_noise_snr_db(total_signal: float, total_noise: float) -> float:
-    """Aggregate photon-counting SNR for independent Poisson signal and noise."""
+    """理想光子计数 SNR（基于死时间校正前的信号和噪声期望值）。
+
+    用于探测器可行性研究和参数扫描，报告的是探测器前端的物理 SNR，
+    而非经过死时间损耗和泊松采样后的实际检测 SNR。
+    """
     denominator = np.sqrt(max(total_signal + total_noise, 1e-24))
     return float(20.0 * np.log10(max(total_signal, 1e-12) / denominator))
 
@@ -957,10 +964,10 @@ def simulate_active_spad(params: SimParams):
         glint_flags = rng.random(n_frames) < params.target.glint_probability
         glint_t[glint_flags] = params.target.glint_gain
 
-    bg_base_t, bg_scene_stray_t = _background_series(t, phase_angle_t, los_unit_t, params)
+    bg_base_t = _background_series(t, phase_angle_t, los_unit_t, params)
     bg_scale = _background_scaling(params, pixel_ifov_urad)
     bg_base_t = bg_base_t * bg_scale
-    bg_scene_stray_t = bg_scene_stray_t * bg_scale
+    bg_scene_stray_t = bg_base_t.copy()  # 场景杂散分量与基底速率共用同一模型，保留命名以保持诊断输出兼容
     bg_spatial = background_spatial_map(
         roi_h,
         roi_w,
@@ -1141,13 +1148,23 @@ def simulate_active_spad(params: SimParams):
     )
 
     if params.spad.afterpulse_probability > 0:
-        # 后脉冲概率应基于死时间校正前的理想光子数，避免在近饱和时低估
-        afterpulse = rng.poisson(mu_total * params.spad.afterpulse_probability)
+        # 后脉冲由实际检测到的雪崩事件触发，因此基于已采样的 counts 而非理想光子数
+        afterpulse = rng.poisson(counts.astype(np.float64) * params.spad.afterpulse_probability)
         counts = counts + afterpulse
     if params.spad.crosstalk_probability > 0:
-        shifted = np.zeros_like(counts)
-        shifted[:, :, 1:] = counts[:, :, :-1]
-        counts = counts + rng.poisson(shifted * params.spad.crosstalk_probability)
+        # 四邻居串扰：每个检测到的光子有概率 crosstalk_probability 在相邻像素触发一次串扰
+        n_frames_ct, roi_h_ct, roi_w_ct = counts.shape
+        total_crosstalk = np.zeros_like(counts)
+        p_nbr = params.spad.crosstalk_probability / 4.0  # 均匀分配到四个邻居
+        # 上邻居
+        total_crosstalk[:, :-1, :] += rng.poisson(counts[:, 1:, :].astype(np.float64) * p_nbr)
+        # 下邻居
+        total_crosstalk[:, 1:, :] += rng.poisson(counts[:, :-1, :].astype(np.float64) * p_nbr)
+        # 左邻居
+        total_crosstalk[:, :, :-1] += rng.poisson(counts[:, :, 1:].astype(np.float64) * p_nbr)
+        # 右邻居
+        total_crosstalk[:, :, 1:] += rng.poisson(counts[:, :, :-1].astype(np.float64) * p_nbr)
+        counts = counts + total_crosstalk
 
     saturation_mask = counts > params.spad.max_count_per_frame
     counts = np.clip(counts, 0, params.spad.max_count_per_frame).astype(np.uint16)

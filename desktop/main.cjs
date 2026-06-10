@@ -20,8 +20,8 @@ function resolveAppRoot() {
   return path.resolve(__dirname, '..');
 }
 
-function findBackendPython() {
-  const selection = selectBackendPython({ appRoot: resolveAppRoot() });
+async function findBackendPython() {
+  const selection = await selectBackendPython({ appRoot: resolveAppRoot() });
   if (!selection.selected) {
     return { notFound: true };
   }
@@ -73,23 +73,23 @@ async function waitForBackend(timeoutMs = 30000) {
 }
 
 async function startBackend() {
-  if (await isBackendHealthy()) return;
+  if (await isBackendHealthy()) return true;
 
   const root = resolveAppRoot();
-  const python = findBackendPython();
+  const python = await findBackendPython();
   if (python.notFound) {
     dialog.showErrorBox(
       '未找到可用的 Python 环境',
       '无法找到可运行的 Python。请安装 Python 3.10+ 并通过 pip install -r requirements.txt 安装依赖，或设置 SPAD_PYTHON_EXE 环境变量指向你的 Python 可执行文件。',
     );
-    return;
+    return false;
   }
   if (python.noCuda) {
     dialog.showErrorBox(
       'SPAD backend requires CUDA',
       'No CUDA-capable Python environment was found. Set SPAD_PYTHON_EXE to a Python with torch+CUDA, or set SPAD_REQUIRE_CUDA=0 to allow CPU fallback.',
     );
-    return;
+    return false;
   }
   const args = [
     ...python.argsPrefix,
@@ -134,7 +134,9 @@ async function startBackend() {
       'SPAD 后端启动失败',
       `无法启动 FastAPI 仿真后端。\n\nPython: ${python.selected_python}\n端口: ${BACKEND_PORT}\nCUDA: ${python.cuda_available ? '已启用' : '未启用'}\n\n请确认已安装 requirements.txt 中的 Python 依赖。`,
     );
+    return false;
   }
+  return true;
 }
 
 function frontendEntryUrl() {
@@ -202,7 +204,12 @@ async function createWindow() {
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.spad.detector.simulator');
   createMenu();
-  await startBackend();
+  const backendReady = await startBackend();
+  if (!backendReady) {
+    // startBackend 已经弹出错误对话框；不打开窗口，直接退出
+    app.quit();
+    return;
+  }
   await createWindow();
 });
 

@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 function pythonCandidates(appRoot = path.resolve(__dirname, '..')) {
   const bundled = path.join(appRoot, 'python', 'python.exe');
@@ -30,7 +30,7 @@ function isRunnableCandidate(candidate) {
   return candidate === 'python' || candidate === 'py' || fs.existsSync(candidate);
 }
 
-function probePython(candidate) {
+async function probePython(candidate) {
   const commandInfo = candidateCommand(candidate);
   const probeCode = [
     'import json, sys',
@@ -48,50 +48,87 @@ function probePython(candidate) {
     'print(json.dumps(payload, ensure_ascii=False))',
   ].join('\n');
 
-  const result = spawnSync(
-    commandInfo.command,
-    [...commandInfo.argsPrefix, '-c', probeCode],
-    { encoding: 'utf8', timeout: 10000 },
-  );
+  return new Promise((resolve) => {
+    const child = spawn(
+      commandInfo.command,
+      [...commandInfo.argsPrefix, '-c', probeCode],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
 
-  if (result.error || result.status !== 0) {
-    return {
-      candidate,
-      runnable: false,
-      cuda_available: false,
-      error: result.error?.message || result.stderr || `exit ${result.status}`,
-    };
-  }
+    const chunks = [];
+    const errChunks = [];
+    child.stdout.on('data', (data) => chunks.push(data));
+    child.stderr.on('data', (data) => errChunks.push(data));
 
-  try {
-    const parsed = JSON.parse(result.stdout.trim());
-    return {
-      candidate,
-      command: commandInfo.command,
-      argsPrefix: commandInfo.argsPrefix,
-      runnable: true,
-      selected_python: parsed.python,
-      torch_available: Boolean(parsed.torch_available),
-      cuda_available: Boolean(parsed.cuda_available),
-      torch_version: parsed.torch_version,
-      torch_cuda_version: parsed.torch_cuda_version,
-      gpu_name: parsed.gpu_name,
-      error: parsed.error,
-    };
-  } catch (error) {
-    return {
-      candidate,
-      runnable: false,
-      cuda_available: false,
-      error: `invalid probe output: ${error.message}`,
-    };
-  }
+    const timeout = setTimeout(() => {
+      child.kill();
+      resolve({
+        candidate,
+        runnable: false,
+        cuda_available: false,
+        error: 'probe timed out after 10s',
+      });
+    }, 10000);
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      const stdout = Buffer.concat(chunks).toString('utf8').trim();
+      const stderr = Buffer.concat(errChunks).toString('utf8').trim();
+
+      if (code !== 0) {
+        resolve({
+          candidate,
+          runnable: false,
+          cuda_available: false,
+          error: stderr || `exit ${code}`,
+        });
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve({
+          candidate,
+          command: commandInfo.command,
+          argsPrefix: commandInfo.argsPrefix,
+          runnable: true,
+          selected_python: parsed.python,
+          torch_available: Boolean(parsed.torch_available),
+          cuda_available: Boolean(parsed.cuda_available),
+          torch_version: parsed.torch_version,
+          torch_cuda_version: parsed.torch_cuda_version,
+          gpu_name: parsed.gpu_name,
+          error: parsed.error,
+        });
+      } catch (error) {
+        resolve({
+          candidate,
+          runnable: false,
+          cuda_available: false,
+          error: `invalid probe output: ${error.message}`,
+        });
+      }
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({
+        candidate,
+        runnable: false,
+        cuda_available: false,
+        error: err.message,
+      });
+    });
+  });
 }
 
-function selectBackendPython(options = {}) {
+async function selectBackendPython(options = {}) {
   const appRoot = options.appRoot || path.resolve(__dirname, '..');
   const candidates = pythonCandidates(appRoot).filter(isRunnableCandidate);
-  const probes = candidates.map(probePython);
+  const probes = [];
+  for (const candidate of candidates) {
+    probes.push(await probePython(candidate));
+  }
   const cudaProbe = probes.find((probe) => probe.runnable && probe.cuda_available);
   const fallbackProbe = probes.find((probe) => probe.runnable);
   const selected = cudaProbe || fallbackProbe || null;
