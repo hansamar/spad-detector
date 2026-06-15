@@ -170,7 +170,11 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
             seed = int(result.get("seed", 0))
             preset = str(result.get("detector_preset", ""))
             dt = 1.0 / sample_rate_hz if sample_rate_hz > 0 else 0.0
-            target_range_m = float(np.mean(result.get("truth_range_series", 0.0) or 0.0))
+            truth_range = result.get("truth_range_series")
+            if truth_range is not None and len(np.asarray(truth_range).ravel()) > 0:
+                target_range_m = float(np.mean(truth_range))
+            else:
+                target_range_m = 0.0
 
             # ── 构建 metadata ──
             summary_dict = summary.model_dump(mode="json")
@@ -202,111 +206,129 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                 summary=summary_dict,
             )
 
-            # ── 生成 event_list ──
-            rng = np.random.default_rng(seed + 1)
-            event_dict = generate_synthetic_event_list(
-                counts=counts,
-                dt=dt,
-                timing_jitter_ns=timing_jitter_ns,
-                tdc_bin_width_ns=tdc_bin_ns,
-                tdc_max_count=tdc_max,
-                signal_cube=signal_cube,
-                bg_expected_cube=bg_cube,
-                dark_expected_cube=dark_cube,
-                target_range_m=target_range_m,
-                rng=rng,
-                roi_h=roi_h,
-                roi_w=roi_w,
-            )
+            # ── 可选生成 event_list ──
+            want_events = bool(req.include_event_list) if req.include_event_list is not None else False
+            event_dict = None
+            event_metadata = None
+            max_events = req.max_event_count if req.max_event_count is not None else 10_000_000
 
-            event_metadata = build_metadata(
-                format=ExportFormat.event_list,
-                n_frames=n_frames,
-                roi_h=roi_h,
-                roi_w=roi_w,
-                sample_rate_hz=sample_rate_hz,
-                observation_time_s=obs_time,
-                dtype="mixed",
-                detector_preset=preset,
-                quantum_efficiency=qe,
-                dead_time_ns=dead_time_ns,
-                timing_jitter_ns=timing_jitter_ns,
-                tdc_bin_width_ns=tdc_bin_ns,
-                tdc_max_count=tdc_max,
-                random_seed=seed,
-                simulation_mode=str(result.get("output_mode", "frame")),
-                event_generation="synthetic_from_frame_counts",
-                event_warning="Event timestamps and TDC bins are synthesized from sampled frame counts and do not represent full event-level TCSPC transport.",
-                event_fields={
-                    "event_times_s": "float32 seconds since simulation start",
-                    "event_frame_index": "int32",
-                    "event_row": "uint16",
-                    "event_col": "uint16",
-                    "event_pixel": "int32, row * roi_w + col",
-                    "event_tof_bins": "uint16",
-                    "event_source": "uint8",
-                },
-                event_source_encoding={
-                    "0": "unknown",
-                    "1": "signal",
-                    "2": "background",
-                    "3": "dark",
-                    "4": "afterpulse",
-                    "5": "crosstalk",
-                },
-                warnings=list(result.get("warnings", [])),
-            )
+            if want_events:
+                total_observed = int(np.sum(counts))
+                if total_observed > max_events:
+                    # 超限：跳过事件生成，写入 warning
+                    count_metadata["warnings"].append(
+                        f"event_list skipped: {total_observed} events exceeds max_event_count ({max_events})"
+                    )
+                else:
+                    rng = np.random.default_rng(seed + 1)
+                    event_dict = generate_synthetic_event_list(
+                        counts=counts,
+                        dt=dt,
+                        timing_jitter_ns=timing_jitter_ns,
+                        tdc_bin_width_ns=tdc_bin_ns,
+                        tdc_max_count=tdc_max,
+                        signal_cube=signal_cube,
+                        bg_expected_cube=bg_cube,
+                        dark_expected_cube=dark_cube,
+                        target_range_m=target_range_m,
+                        rng=rng,
+                        roi_h=roi_h,
+                        roi_w=roi_w,
+                    )
 
-            write_event_npz(
-                artifacts_dir / "events",
-                **event_dict,
-                metadata=event_metadata,
-                summary=summary_dict,
-            )
+                    event_metadata = build_metadata(
+                        format=ExportFormat.event_list,
+                        n_frames=n_frames,
+                        roi_h=roi_h,
+                        roi_w=roi_w,
+                        sample_rate_hz=sample_rate_hz,
+                        observation_time_s=obs_time,
+                        dtype="mixed",
+                        detector_preset=preset,
+                        quantum_efficiency=qe,
+                        dead_time_ns=dead_time_ns,
+                        timing_jitter_ns=timing_jitter_ns,
+                        tdc_bin_width_ns=tdc_bin_ns,
+                        tdc_max_count=tdc_max,
+                        random_seed=seed,
+                        simulation_mode=str(result.get("output_mode", "frame")),
+                        event_generation="synthetic_from_frame_counts",
+                        event_warning="Event timestamps and TDC bins are synthesized from sampled frame counts and do not represent full event-level TCSPC transport.",
+                        event_fields={
+                            "event_times_s": "float32 seconds since simulation start",
+                            "event_frame_index": "int32",
+                            "event_row": "uint16",
+                            "event_col": "uint16",
+                            "event_pixel": "int32, row * roi_w + col",
+                            "event_tof_bins": "uint16",
+                            "event_source": "uint8",
+                        },
+                        event_source_encoding={
+                            "0": "unknown",
+                            "1": "signal",
+                            "2": "background",
+                            "3": "dark",
+                            "4": "afterpulse",
+                            "5": "crosstalk",
+                        },
+                        warnings=list(result.get("warnings", [])),
+                    )
 
-            # ── 生成 tdc_frame_cube ──
-            empty_val = tdc_max + 2
-            tdc_cube = generate_tdc_frame_cube_from_event_list(
-                event_frame_index=event_dict["event_frame_index"],
-                event_row=event_dict["event_row"],
-                event_col=event_dict["event_col"],
-                event_tof_bins=event_dict["event_tof_bins"],
-                n_frames=n_frames,
-                roi_h=roi_h,
-                roi_w=roi_w,
-                empty_pixel_value=empty_val,
-                collision_policy="first_event",
-            )
+                    write_event_npz(
+                        artifacts_dir / "events",
+                        **event_dict,
+                        metadata=event_metadata,
+                        summary=summary_dict,
+                    )
 
-            tdc_metadata = build_metadata(
-                format=ExportFormat.tdc_frame_cube,
-                n_frames=n_frames,
-                roi_h=roi_h,
-                roi_w=roi_w,
-                sample_rate_hz=sample_rate_hz,
-                observation_time_s=obs_time,
-                dtype="uint16",
-                detector_preset=preset,
-                quantum_efficiency=qe,
-                dead_time_ns=dead_time_ns,
-                timing_jitter_ns=timing_jitter_ns,
-                tdc_bin_width_ns=tdc_bin_ns,
-                tdc_max_count=tdc_max,
-                empty_pixel_value=empty_val,
-                collision_policy="first_event",
-                random_seed=seed,
-                simulation_mode=str(result.get("output_mode", "frame")),
-                warnings=list(result.get("warnings", [])),
-            )
+            # ── 可选生成 tdc_frame_cube ──
+            want_tdc = bool(req.include_tdc_frame_cube) if req.include_tdc_frame_cube is not None else False
+            tdc_cube = None
+            tdc_metadata = None
 
-            write_tdc_frame_cube_bin(
-                artifacts_dir / "tdc_frame_cube",
-                tdc_cube,
-                metadata=tdc_metadata,
-                summary=summary_dict,
-            )
+            if want_tdc and event_dict is not None:
+                empty_val = tdc_max + 2
+                tdc_cube = generate_tdc_frame_cube_from_event_list(
+                    event_frame_index=event_dict["event_frame_index"],
+                    event_row=event_dict["event_row"],
+                    event_col=event_dict["event_col"],
+                    event_tof_bins=event_dict["event_tof_bins"],
+                    n_frames=n_frames,
+                    roi_h=roi_h,
+                    roi_w=roi_w,
+                    empty_pixel_value=empty_val,
+                    collision_policy="first_event",
+                )
 
-            # ── 写入 bundle ──
+                tdc_metadata = build_metadata(
+                    format=ExportFormat.tdc_frame_cube,
+                    n_frames=n_frames,
+                    roi_h=roi_h,
+                    roi_w=roi_w,
+                    sample_rate_hz=sample_rate_hz,
+                    observation_time_s=obs_time,
+                    dtype="uint16",
+                    detector_preset=preset,
+                    quantum_efficiency=qe,
+                    dead_time_ns=dead_time_ns,
+                    timing_jitter_ns=timing_jitter_ns,
+                    tdc_bin_width_ns=tdc_bin_ns,
+                    tdc_max_count=tdc_max,
+                    empty_pixel_value=empty_val,
+                    collision_policy="first_event",
+                    random_seed=seed,
+                    simulation_mode=str(result.get("output_mode", "frame")),
+                    warnings=list(result.get("warnings", [])),
+                )
+
+                write_tdc_frame_cube_bin(
+                    artifacts_dir / "tdc_frame_cube",
+                    tdc_cube,
+                    metadata=tdc_metadata,
+                    summary=summary_dict,
+                )
+
+            # ── 写入 bundle（仅包含已生成的产物）──
             write_bundle_zip(
                 artifacts_dir / "bundle",
                 counts=counts,

@@ -126,6 +126,11 @@ class SimulateRequest(BaseModel):
     drift_pixels_per_s_y: float | None = None
     jitter_sigma_pixels: float | None = Field(default=None, ge=0)
 
+    # Export control
+    include_event_list: bool | None = None
+    include_tdc_frame_cube: bool | None = None
+    max_event_count: int | None = Field(default=None, ge=0)
+
     @model_validator(mode="after")
     def validate_backend_budget(self) -> "SimulateRequest":
         observation_time_s = self.observation_time_s if self.observation_time_s is not None else 60.0

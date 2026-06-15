@@ -398,9 +398,9 @@ if __name__ == "__main__":
     for test_name in tests:
         try:
             globals()[test_name]()
-            print(f"✓ {test_name}")
+            print(f"PASS {test_name}")
         except Exception as exc:
-            print(f"✗ {test_name}: {exc}")
+            print(f"FAIL {test_name}: {exc}")
             failed += 1
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     sys.exit(failed)
