@@ -1,0 +1,5 @@
+{
+  "name": "SPAD Detector Simulator",
+  "description": "An interactive 3D simulation of a bouncing tennis ball detected by a single-photon avalanche diode (SPAD) array. Users can configure physics and detector parameters to generate and download synthetic single-photon data.",
+  "requestFramePermissions": []
+}

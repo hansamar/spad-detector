@@ -96,6 +96,7 @@ def build_metadata(
     warnings: list[str] | None = None,
     assumptions: list[str] | None = None,
     git_commit: str | None = None,
+    custom_shape: dict | None = None,
 ) -> dict:
     """构建标准化的 metadata.json 负载。
 
@@ -154,6 +155,9 @@ def build_metadata(
             meta["fields"] = event_fields
         if event_source_encoding:
             meta["event_source_encoding"] = event_source_encoding
+
+    if custom_shape is not None:
+        meta["custom_shape"] = custom_shape
 
     return meta
 
@@ -395,15 +399,15 @@ def generate_synthetic_event_list(
     signal_cube: np.ndarray,
     bg_expected_cube: np.ndarray,
     dark_expected_cube: np.ndarray,
-    target_range_m: float,
+    truth_range_series: np.ndarray | None,
     rng: np.random.Generator,
     roi_h: int,
     roi_w: int,
 ) -> dict[str, np.ndarray]:
     """从 frame-level 数据合成 event_list（含 event_source 标记）。
 
-    当前实现为 synthetic 模式：各分量按期望比例采样事件，signal 事件
-    分配 ToF bin（基于 range），background/dark 事件分配随机 bin。
+    当前实现为 synthetic 模式：各分量按期望比例使用 multinomial 采样，signal 事件
+    分配 ToF bin（基于每帧 range），background/dark 事件分配随机 bin。
 
     返回的 dict 包含所有 event 字段数组。
     """
@@ -422,13 +426,13 @@ def generate_synthetic_event_list(
     frac_dark = dark_expected_cube / total_safe
 
     bin_width_s = tdc_bin_width_ns * 1e-9 if tdc_bin_width_ns > 0 else 0.0
-    # ToF bin from range: bin = round(2 * range / (c * bin_width_s))
-    if bin_width_s > 0 and target_range_m > 0:
-        tof_s = 2.0 * target_range_m / SPEED_OF_LIGHT_MS
-        expected_tof_bin = int(round(tof_s / bin_width_s))
-        expected_tof_bin = max(1, min(expected_tof_bin, tdc_max_count))
+
+    # 逐帧 ToF 时间（基于每帧 range，支持动态目标）
+    if truth_range_series is not None and len(truth_range_series) > 0:
+        ranges = np.asarray(truth_range_series, dtype=np.float64).ravel()
+        tof_s_per_frame = 2.0 * ranges / SPEED_OF_LIGHT_MS
     else:
-        expected_tof_bin = 1
+        tof_s_per_frame = np.zeros(n_frames, dtype=np.float64)
 
     for frame_idx in range(n_frames):
         frame_counts = counts[frame_idx]
@@ -441,18 +445,25 @@ def generate_synthetic_event_list(
             if count <= 0:
                 continue
 
-            # 按期望比例分配事件来源
-            n_signal = int(round(count * float(frac_signal[frame_idx, row, col])))
-            n_bg = int(round(count * float(frac_bg[frame_idx, row, col])))
-            n_dark = count - n_signal - n_bg
-            if n_dark < 0:
-                n_dark = 0
+            # 按期望比例分配事件来源（multinomial 保证总和等于 count）
+            probs = np.array([
+                float(frac_signal[frame_idx, row, col]),
+                float(frac_bg[frame_idx, row, col]),
+                float(frac_dark[frame_idx, row, col]),
+            ])
+            probs = probs / probs.sum()  # 归一化，确保总和为 1
+            n_signal, n_bg, n_dark = rng.multinomial(count, probs)
 
-            # signal events: ToF bin 围绕期望值随机分布
+            # 按帧级 range 计算该帧的期望 ToF bin
+            frame_tof_bin = int(round(tof_s_per_frame[frame_idx] / bin_width_s)) if bin_width_s > 0 else 1
+            frame_tof_bin = max(1, min(frame_tof_bin, tdc_max_count))
+
+            # signal events: ToF bin 围绕期望值，抖动由 timing_jitter_ns 决定
             if n_signal > 0:
                 times_signal = frame_idx * dt + np.sort(rng.uniform(0.0, dt, size=n_signal))
                 if bin_width_s > 0:
-                    signal_bins = rng.poisson(expected_tof_bin, size=n_signal).astype(np.int32)
+                    sigma_bins = max(timing_jitter_ns / tdc_bin_width_ns, 0.25)
+                    signal_bins = (frame_tof_bin + rng.normal(0.0, sigma_bins, size=n_signal)).round().astype(np.int32)
                     signal_bins = np.clip(signal_bins, 1, tdc_max_count)
                 else:
                     signal_bins = np.ones(n_signal, dtype=np.int32)

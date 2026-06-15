@@ -103,17 +103,15 @@ def _get_artifact_path(job_id: str, format: ExportFormat | str) -> Path | None:
 
 
 def get_simulation_job_artifact(job_id: str, format: str | None = None) -> Path | None:
-    """获取产物文件路径。默认返回 count_cube .bin。"""
-    fmt = ExportFormat(format) if format else ExportFormat.count_cube
-    # 尝试按指定格式查找
-    path = _get_artifact_path(job_id, fmt)
-    if path is not None:
-        return path
-    # 回退：bundle 中包含所有文件
-    bundle_path = _get_artifact_path(job_id, ExportFormat.bundle)
-    if bundle_path is not None:
-        return bundle_path
-    return None
+    """获取产物文件路径。默认返回 count_cube .bin。
+
+    指定格式不存在时返回 None，调用方应据此报错，不应静默回退。
+    """
+    try:
+        fmt = ExportFormat(format) if format else ExportFormat.count_cube
+    except ValueError:
+        return None
+    return _get_artifact_path(job_id, fmt)
 
 
 def get_simulation_job_metadata(job_id: str) -> Path | None:
@@ -170,14 +168,20 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
             seed = int(result.get("seed", 0))
             preset = str(result.get("detector_preset", ""))
             dt = 1.0 / sample_rate_hz if sample_rate_hz > 0 else 0.0
-            truth_range = result.get("truth_range_series")
-            if truth_range is not None and len(np.asarray(truth_range).ravel()) > 0:
-                target_range_m = float(np.mean(truth_range))
-            else:
-                target_range_m = 0.0
 
             # ── 构建 metadata ──
             summary_dict = summary.model_dump(mode="json")
+
+            # 自定义形状信息
+            custom_shape_meta = None
+            if params.target.custom_shape_x is not None and len(params.target.custom_shape_x) > 0:
+                custom_shape_meta = {
+                    "enabled": True,
+                    "num_points": len(params.target.custom_shape_x),
+                    "aspect_ratio": params.target.custom_shape_aspect_ratio,
+                    "sampling": "deterministic_stride",
+                }
+
             count_metadata = build_metadata(
                 format=ExportFormat.count_cube,
                 n_frames=n_frames,
@@ -196,6 +200,7 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                 simulation_mode=str(result.get("output_mode", "frame")),
                 warnings=list(result.get("warnings", [])),
                 assumptions=list(result.get("assumptions", [])),
+                custom_shape=custom_shape_meta,
             )
 
             # ── 写入 count_cube ──
@@ -230,7 +235,7 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                         signal_cube=signal_cube,
                         bg_expected_cube=bg_cube,
                         dark_expected_cube=dark_cube,
-                        target_range_m=target_range_m,
+                        truth_range_series=result.get("truth_range_series"),
                         rng=rng,
                         roi_h=roi_h,
                         roi_w=roi_w,

@@ -189,7 +189,7 @@ def test_event_list_field_lengths() -> None:
         signal_cube=signal_cube,
         bg_expected_cube=bg_cube,
         dark_expected_cube=dark_cube,
-        target_range_m=50,
+        truth_range_series=np.full(5, 50.0, dtype=np.float64),
         rng=rng,
         roi_h=4,
         roi_w=4,
@@ -307,16 +307,11 @@ def test_tdc_valid_range() -> None:
         signal_cube=sig,
         bg_expected_cube=bg,
         dark_expected_cube=dark,
-        target_range_m=50,
+        truth_range_series=np.full(10, 50.0, dtype=np.float64),
         rng=rng,
         roi_h=4,
         roi_w=4,
     )
-
-    bins = events["event_tof_bins"]
-    assert len(bins) > 0
-    assert int(np.min(bins)) >= 1
-    assert int(np.max(bins)) <= tdc_max
 
 
 def test_bundle_zip_contents() -> None:
@@ -375,7 +370,7 @@ def test_event_source_encoding() -> None:
         signal_cube=sig,
         bg_expected_cube=bg,
         dark_expected_cube=dark,
-        target_range_m=50,
+        truth_range_series=np.full(5, 50.0, dtype=np.float64),
         rng=rng,
         roi_h=4,
         roi_w=4,

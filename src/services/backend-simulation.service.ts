@@ -661,6 +661,10 @@ export class BackendSimulationService {
       pixel_pitch_um: params.pixelPitchUm,
       fill_factor: params.fillFactor,
       microlens_gain: params.microlensGain,
+      // Event/TDC 导出控制：始终请求完整数据，由后端根据 max_event_count 守卫决定是否实际生成
+      include_event_list: true,
+      include_tdc_frame_cube: true,
+      max_event_count: 10_000_000,
     };
   }
 
