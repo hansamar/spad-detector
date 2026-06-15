@@ -28,6 +28,12 @@ __pycache__/
 .venv/
 venv/
 
+# External/tool artifacts
+SPAD-Simulator-main/
+REASONIX.md
+AGENTS.md
+*.md.tmp
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
