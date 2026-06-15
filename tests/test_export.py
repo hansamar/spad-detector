@@ -313,6 +313,21 @@ def test_tdc_valid_range() -> None:
         roi_w=4,
     )
 
+    # 验证 TDC bin 在有效范围内
+    tof = events["event_tof_bins"]
+    assert len(tof) > 0
+    assert np.all(tof >= 1), f"min tof bin: {tof.min()}"
+    assert np.all(tof <= tdc_max), f"max tof bin: {tof.max()}"
+
+    # 验证事件总数与 counts 一致（multinomial）
+    assert len(events["event_times_s"]) == int(np.sum(counts)), \
+        f"event count {len(events['event_times_s'])} != counts sum {int(np.sum(counts))}"
+
+    # 验证所有字段长度一致
+    n = len(events["event_times_s"])
+    for field in ("event_frame_index", "event_row", "event_col", "event_pixel", "event_tof_bins", "event_source"):
+        assert len(events[field]) == n, f"{field} length mismatch"
+
 
 def test_bundle_zip_contents() -> None:
     """验证 bundle.zip 包含必需文件。"""

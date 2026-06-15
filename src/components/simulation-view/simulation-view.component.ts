@@ -592,6 +592,8 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const fov = Math.max(0.01, Math.min(this.detectorFov(), 179));
       const fovInRad = fov * Math.PI / 180;
+      // 激光束角使用独立的 transmitter divergence，与接收端 detector FOV 解耦
+      const txDivergenceRad = this.transmitterDivergenceMrad() * 1e-3 / 2;
 
       if (this.detectorCamera) {
         this.detectorCamera.fov = fov;
@@ -599,12 +601,12 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
       }
 
       if (this.laserSpotlight) {
-        this.laserSpotlight.angle = fovInRad / 2;
+        this.laserSpotlight.angle = txDivergenceRad;
       }
 
       if (this.laserBeam) {
         const beamDistance = 20;
-        const beamEndRadius = beamDistance * Math.tan(fovInRad / 2);
+        const beamEndRadius = beamDistance * Math.tan(txDivergenceRad);
 
         const newGeo = new THREE.CylinderGeometry(beamEndRadius, 0.01, beamDistance, 32, 1, true);
         newGeo.rotateX(Math.PI / 2);

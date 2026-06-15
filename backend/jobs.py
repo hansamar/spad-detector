@@ -203,14 +203,6 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                 custom_shape=custom_shape_meta,
             )
 
-            # ── 写入 count_cube ──
-            write_count_cube_bin(
-                artifacts_dir / "counts",
-                counts,
-                metadata=count_metadata,
-                summary=summary_dict,
-            )
-
             # ── 可选生成 event_list ──
             want_events = bool(req.include_event_list) if req.include_event_list is not None else False
             event_dict = None
@@ -343,6 +335,14 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                 tdc_metadata=tdc_metadata,
                 events=event_dict,
                 events_metadata=event_metadata,
+            )
+
+            # ── 写入 count_cube（在 event/TDC 之后，确保所有 warning 已追加到 metadata）──
+            write_count_cube_bin(
+                artifacts_dir / "counts",
+                counts,
+                metadata=count_metadata,
+                summary=summary_dict,
             )
 
         except OSError as exc:

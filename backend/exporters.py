@@ -451,11 +451,16 @@ def generate_synthetic_event_list(
                 float(frac_bg[frame_idx, row, col]),
                 float(frac_dark[frame_idx, row, col]),
             ])
-            probs = probs / probs.sum()  # 归一化，确保总和为 1
+            s = float(probs.sum())
+            if not np.isfinite(s) or s <= 0.0:
+                probs = np.array([0.0, 0.0, 1.0])  # 退化到 unknown（标记为 dark）
+            else:
+                probs = probs / s
             n_signal, n_bg, n_dark = rng.multinomial(count, probs)
 
-            # 按帧级 range 计算该帧的期望 ToF bin
-            frame_tof_bin = int(round(tof_s_per_frame[frame_idx] / bin_width_s)) if bin_width_s > 0 else 1
+            # 按帧级 range 计算该帧的期望 ToF bin（带边界保护）
+            range_idx = min(frame_idx, len(tof_s_per_frame) - 1)
+            frame_tof_bin = int(round(tof_s_per_frame[range_idx] / bin_width_s)) if bin_width_s > 0 else 1
             frame_tof_bin = max(1, min(frame_tof_bin, tdc_max_count))
 
             # signal events: ToF bin 围绕期望值，抖动由 timing_jitter_ns 决定
