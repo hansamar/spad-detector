@@ -81,6 +81,58 @@
           </svg>
           {{ l.t('downloadData')() }}
         </button>
+
+        <!-- Export format selector -->
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-xs space-y-1">
+          <label class="text-gray-400 block mb-1">{{ l.t('exportFormat')() }}</label>
+          <select
+            [value]="selectedExportFormat()"
+            (change)="selectedExportFormat.set($any($event.target).value)"
+            class="w-full bg-gray-700 text-gray-200 rounded p-1 text-xs border border-gray-600">
+            <option value="bundle">Bundle (.zip) — 推荐</option>
+            <option value="count_cube">Count Cube (.bin)</option>
+            <option value="tdc_frame_cube">TDC Frame Cube (.bin)</option>
+            <option value="event_list">Event List (.npz)</option>
+          </select>
+        </div>
+
+        <!-- ToF/TDC Diagnostics Panel -->
+        <div class="rounded border border-cyan-700/60 bg-cyan-950/20 p-3 text-xs space-y-2">
+          <h3 class="text-cyan-300 font-semibold text-sm">ToF / TDC 诊断</h3>
+          <div class="grid grid-cols-2 gap-x-2 gap-y-1">
+            <span class="text-gray-400">Frame duration</span>
+            <span class="text-gray-200 text-right">{{ frameDurationUs() | number:'1.1-2' }} µs</span>
+
+            <span class="text-gray-400">Sample rate</span>
+            <span class="text-gray-200 text-right">{{ (1e6 / frameDurationUs()) | number:'1.0-0' }} Hz</span>
+
+            <span class="text-gray-400">Number of frames</span>
+            <span class="text-gray-200 text-right">{{ nFrames() }}</span>
+
+            <span class="text-gray-400">Total observation</span>
+            <span class="text-gray-200 text-right">{{ (nFrames() * frameDurationUs() / 1e6) | number:'1.3-3' }} s</span>
+
+            <span class="text-gray-400 !mt-2" style="margin-top:0.5rem">TDC bin width</span>
+            <span class="text-gray-200 text-right !mt-2" style="margin-top:0.5rem">{{ tdcBinWidthNs() | number:'1.3-3' }} ns</span>
+
+            <span class="text-gray-400">TDC max count</span>
+            <span class="text-gray-200 text-right">{{ tdcMaxCount() }}</span>
+
+            <span class="text-gray-400">Range bin</span>
+            <span class="text-gray-200 text-right">{{ rangeBinM() | number:'1.3-3' }} m</span>
+
+            <span class="text-gray-400">Max unambiguous range</span>
+            <span class="text-gray-200 text-right">{{ maxUnambiguousRangeM() | number:'1.1-1' }} m</span>
+
+            <span class="text-gray-400">Timing jitter (σ)</span>
+            <span class="text-gray-200 text-right">{{ timingJitterNs() | number:'1.3-3' }} ns</span>
+          </div>
+          <p class="text-gray-500 leading-relaxed !mt-2" style="margin-top:0.5rem">
+            <strong>frameDurationUs</strong> 控制主仿真帧积分时间。<br/>
+            <strong>timeResolutionPs</strong> 控制 ToF/TDC bin 宽度。<br/>
+            <strong>nFrames</strong> 是主时间帧数，不是 ToF bin 数。
+          </p>
+        </div>
         @if (backendJob() && backendJob()?.status !== 'completed') {
           <div class="rounded border border-cyan-700/50 bg-cyan-950/30 p-3 text-xs text-cyan-100">
             {{ l.t('backendJobStatus')() }}:

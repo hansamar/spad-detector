@@ -165,7 +165,42 @@ python -m compileall -q backend sim scripts
 | `POST /api/simulate/summary` | Return a lightweight visualization summary |
 | `POST /api/simulate/jobs` | Start an asynchronous simulation job |
 | `GET /api/simulate/jobs/{job_id}` | Poll job state and summary |
-| `GET /api/simulate/jobs/{job_id}/download` | Download the completed `uint16` count cube |
+| `GET /api/simulate/jobs/{job_id}/download` | Download artifact (`?format=count_cube\|tdc_frame_cube\|event_list\|bundle`) |
+| `GET /api/simulate/jobs/{job_id}/metadata` | Retrieve the completed job's `metadata.json` |
+
+## Output Formats
+
+SPAD Detector produces three complementary data formats for different research and engineering needs.
+
+| Format | File | Shape | dtype | Purpose |
+|--------|------|-------|-------|---------|
+| **count_cube** | `counts.bin` | `[n_frames, roi_h, roi_w]` | uint16 | Primary research output: photon counts per frame-pixel |
+| **tdc_frame_cube** | `tdc_frame_cube.bin` | `[n_frames, roi_h, roi_w]` | uint16 | ToF/TDC visualization: first TDC bin per frame-pixel |
+| **event_list** | `events.npz` | N event records | mixed | Event-level data with time, pixel, TDC bin, source |
+| **bundle** | `bundle.zip` | all of the above | — | Recommended download format with metadata |
+
+> **Important**: `n_frames` is the number of main-simulation time frames (`observation_time_s × sample_rate_hz`), **not** the number of ToF/TDC bins. ToF information lives inside each `tdc_frame_cube` element value or in `event_tof_bins`.
+
+### Key Distinctions
+
+| Concept | Meaning | Example |
+|---------|---------|---------|
+| `frameDurationUs` | Integration time per main frame | 20 µs |
+| `nFrames` | Number of main time frames | 20,000 |
+| `timeResolutionPs` | TDC bin width | 256 ps |
+| `rangeBinM` | Distance per TDC bin | 3.84 cm |
+| `maxUnambiguousRangeM` | Maximum distance before TDC wraps | 314.5 m |
+
+### How to choose
+
+- **Photon-counting research** → `count_cube`
+- **ToF/TDC visualization, legacy SPAD-Simulator compatibility** → `tdc_frame_cube`
+- **Fine-grained event analysis, TCSPC processing** → `event_list`
+- **Reproducible output archive** → `bundle`
+
+Every `.bin` export comes with a `metadata.json` sidecar containing shape, dtype, layout, and simulation parameters. Read [DATA_FORMAT.md](docs/DATA_FORMAT.md) for the full specification and reading examples in Python and MATLAB.
+
+> **Difference from legacy SPAD-Simulator**: The old simulator's `.bin` format stored one TDC bin per frame-pixel. SPAD Detector's primary format is a photon-count cube. TDC frame cube is available as an optional legacy-compatible export but should not replace count cube for photon-counting studies.
 
 ## Backend Limits
 

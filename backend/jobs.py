@@ -1,16 +1,27 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
 from backend.convert import params_from_request, result_to_summary_response
+from backend.exporters import (
+    ExportFormat,
+    build_metadata,
+    generate_synthetic_event_list,
+    generate_tdc_frame_cube_from_event_list,
+    write_count_cube_bin,
+    write_tdc_frame_cube_bin,
+    write_event_npz,
+    write_bundle_zip,
+)
 from backend.models import SimulateJobStatusResponse, SimulateRequest, SimulateSummaryResponse
 from sim.active_imaging_sim import simulate_active_spad
 
@@ -20,13 +31,17 @@ _executor = ThreadPoolExecutor(max_workers=int(os.environ.get("SPAD_JOB_WORKERS"
 _lock = threading.Lock()
 _jobs: dict[str, dict] = {}
 
+# 每个异步任务产生的产物文件列表
+_ARTIFACT_FILES = {
+    ExportFormat.count_cube: "counts.bin",
+    ExportFormat.tdc_frame_cube: "tdc_frame_cube.bin",
+    ExportFormat.event_list: "events.npz",
+    ExportFormat.bundle: "bundle.zip",
+}
+
 
 def _now() -> float:
     return time.time()
-
-
-def _job_download_url(job_id: str, status: str) -> str | None:
-    return f"/api/simulate/jobs/{job_id}/download" if status == "completed" else None
 
 
 def _response_from_record(record: dict) -> SimulateJobStatusResponse:
@@ -38,7 +53,7 @@ def _response_from_record(record: dict) -> SimulateJobStatusResponse:
         summary=record.get("summary"),
         result=record.get("result"),
         error=record.get("error"),
-        download_url=_job_download_url(record["job_id"], record["status"]),
+        download_url=f"/api/simulate/jobs/{record['job_id']}/download" if record["status"] == "completed" else None,
     )
 
 
@@ -53,8 +68,7 @@ def create_simulation_job(req: SimulateRequest) -> SimulateJobStatusResponse:
         "summary": None,
         "result": None,
         "error": None,
-        "artifact_path": str(ARTIFACT_DIR / f"{job_id}.bin"),
-        "summary_path": str(ARTIFACT_DIR / f"{job_id}.summary.json"),
+        "artifacts_dir": str(ARTIFACT_DIR / f"{job_id}_artifacts"),
     }
     with _lock:
         _jobs[job_id] = record
@@ -70,12 +84,45 @@ def get_simulation_job(job_id: str) -> SimulateJobStatusResponse | None:
         return _response_from_record(dict(record))
 
 
-def get_simulation_job_artifact(job_id: str) -> Path | None:
+def _get_artifact_path(job_id: str, format: ExportFormat | str) -> Path | None:
+    """根据格式返回产物文件路径。"""
     with _lock:
         record = _jobs.get(job_id)
         if record is None or record["status"] != "completed":
             return None
-        path = Path(record["artifact_path"])
+        artifacts_dir = Path(record["artifacts_dir"])
+
+    if isinstance(format, str):
+        format = ExportFormat(format)
+
+    filename = _ARTIFACT_FILES.get(format)
+    if filename is None:
+        return None
+    path = artifacts_dir / filename
+    return path if path.exists() else None
+
+
+def get_simulation_job_artifact(job_id: str, format: str | None = None) -> Path | None:
+    """获取产物文件路径。默认返回 count_cube .bin。"""
+    fmt = ExportFormat(format) if format else ExportFormat.count_cube
+    # 尝试按指定格式查找
+    path = _get_artifact_path(job_id, fmt)
+    if path is not None:
+        return path
+    # 回退：bundle 中包含所有文件
+    bundle_path = _get_artifact_path(job_id, ExportFormat.bundle)
+    if bundle_path is not None:
+        return bundle_path
+    return None
+
+
+def get_simulation_job_metadata(job_id: str) -> Path | None:
+    """获取 metadata.json 文件路径。"""
+    with _lock:
+        record = _jobs.get(job_id)
+        if record is None or record["status"] != "completed":
+            return None
+        path = Path(record["artifacts_dir"]) / "counts.metadata.json"
     return path if path.exists() else None
 
 
@@ -97,15 +144,180 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
 
         with _lock:
             record = _jobs[job_id]
-            artifact_path = record["artifact_path"]
-            summary_path = record["summary_path"]
+            artifacts_dir = Path(record["artifacts_dir"])
 
         try:
-            np.asarray(result["counts"], dtype=np.uint16).tofile(artifact_path)
-            Path(summary_path).write_text(
-                json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+            # ── 从结果中提取关键数据 ──
+            counts = np.asarray(result["counts"], dtype=np.uint16)
+            n_frames = int(result["n_frames"])
+            roi_h = int(result["roi_h"])
+            roi_w = int(result["roi_w"])
+            sample_rate_hz = float(result["sample_rate_hz"])
+            obs_time = float(n_frames / sample_rate_hz) if sample_rate_hz > 0 else 0.0
+
+            signal_cube = np.asarray(result["signal_cube"], dtype=np.float32)
+            bg_cube = np.asarray(result["bg_expected_cube"], dtype=np.float32)
+            dark_cube = np.asarray(result["dark_expected_cube"], dtype=np.float32)
+
+            detector_summary = result.get("detector_summary", {})
+            qe = float(detector_summary.get("quantum_efficiency", 0.0))
+            tdc_bin_ns = float(detector_summary.get("tdc_bin_width_ns", 0.0))
+            tdc_max = int(detector_summary.get("max_count_per_frame", 0))
+            timing_jitter_ns = float(detector_summary.get("irf_fwhm_ps", 0.0)) / 1e3
+            dead_time_ns = float(params.spad.dead_time_ns)
+            seed = int(result.get("seed", 0))
+            preset = str(result.get("detector_preset", ""))
+            dt = 1.0 / sample_rate_hz if sample_rate_hz > 0 else 0.0
+            target_range_m = float(np.mean(result.get("truth_range_series", 0.0) or 0.0))
+
+            # ── 构建 metadata ──
+            summary_dict = summary.model_dump(mode="json")
+            count_metadata = build_metadata(
+                format=ExportFormat.count_cube,
+                n_frames=n_frames,
+                roi_h=roi_h,
+                roi_w=roi_w,
+                sample_rate_hz=sample_rate_hz,
+                observation_time_s=obs_time,
+                dtype="uint16",
+                detector_preset=preset,
+                quantum_efficiency=qe,
+                dead_time_ns=dead_time_ns,
+                timing_jitter_ns=timing_jitter_ns,
+                tdc_bin_width_ns=tdc_bin_ns,
+                tdc_max_count=tdc_max,
+                random_seed=seed,
+                simulation_mode=str(result.get("output_mode", "frame")),
+                warnings=list(result.get("warnings", [])),
+                assumptions=list(result.get("assumptions", [])),
             )
+
+            # ── 写入 count_cube ──
+            write_count_cube_bin(
+                artifacts_dir / "counts",
+                counts,
+                metadata=count_metadata,
+                summary=summary_dict,
+            )
+
+            # ── 生成 event_list ──
+            rng = np.random.default_rng(seed + 1)
+            event_dict = generate_synthetic_event_list(
+                counts=counts,
+                dt=dt,
+                timing_jitter_ns=timing_jitter_ns,
+                tdc_bin_width_ns=tdc_bin_ns,
+                tdc_max_count=tdc_max,
+                signal_cube=signal_cube,
+                bg_expected_cube=bg_cube,
+                dark_expected_cube=dark_cube,
+                target_range_m=target_range_m,
+                rng=rng,
+                roi_h=roi_h,
+                roi_w=roi_w,
+            )
+
+            event_metadata = build_metadata(
+                format=ExportFormat.event_list,
+                n_frames=n_frames,
+                roi_h=roi_h,
+                roi_w=roi_w,
+                sample_rate_hz=sample_rate_hz,
+                observation_time_s=obs_time,
+                dtype="mixed",
+                detector_preset=preset,
+                quantum_efficiency=qe,
+                dead_time_ns=dead_time_ns,
+                timing_jitter_ns=timing_jitter_ns,
+                tdc_bin_width_ns=tdc_bin_ns,
+                tdc_max_count=tdc_max,
+                random_seed=seed,
+                simulation_mode=str(result.get("output_mode", "frame")),
+                event_generation="synthetic_from_frame_counts",
+                event_warning="Event timestamps and TDC bins are synthesized from sampled frame counts and do not represent full event-level TCSPC transport.",
+                event_fields={
+                    "event_times_s": "float32 seconds since simulation start",
+                    "event_frame_index": "int32",
+                    "event_row": "uint16",
+                    "event_col": "uint16",
+                    "event_pixel": "int32, row * roi_w + col",
+                    "event_tof_bins": "uint16",
+                    "event_source": "uint8",
+                },
+                event_source_encoding={
+                    "0": "unknown",
+                    "1": "signal",
+                    "2": "background",
+                    "3": "dark",
+                    "4": "afterpulse",
+                    "5": "crosstalk",
+                },
+                warnings=list(result.get("warnings", [])),
+            )
+
+            write_event_npz(
+                artifacts_dir / "events",
+                **event_dict,
+                metadata=event_metadata,
+                summary=summary_dict,
+            )
+
+            # ── 生成 tdc_frame_cube ──
+            empty_val = tdc_max + 2
+            tdc_cube = generate_tdc_frame_cube_from_event_list(
+                event_frame_index=event_dict["event_frame_index"],
+                event_row=event_dict["event_row"],
+                event_col=event_dict["event_col"],
+                event_tof_bins=event_dict["event_tof_bins"],
+                n_frames=n_frames,
+                roi_h=roi_h,
+                roi_w=roi_w,
+                empty_pixel_value=empty_val,
+                collision_policy="first_event",
+            )
+
+            tdc_metadata = build_metadata(
+                format=ExportFormat.tdc_frame_cube,
+                n_frames=n_frames,
+                roi_h=roi_h,
+                roi_w=roi_w,
+                sample_rate_hz=sample_rate_hz,
+                observation_time_s=obs_time,
+                dtype="uint16",
+                detector_preset=preset,
+                quantum_efficiency=qe,
+                dead_time_ns=dead_time_ns,
+                timing_jitter_ns=timing_jitter_ns,
+                tdc_bin_width_ns=tdc_bin_ns,
+                tdc_max_count=tdc_max,
+                empty_pixel_value=empty_val,
+                collision_policy="first_event",
+                random_seed=seed,
+                simulation_mode=str(result.get("output_mode", "frame")),
+                warnings=list(result.get("warnings", [])),
+            )
+
+            write_tdc_frame_cube_bin(
+                artifacts_dir / "tdc_frame_cube",
+                tdc_cube,
+                metadata=tdc_metadata,
+                summary=summary_dict,
+            )
+
+            # ── 写入 bundle ──
+            write_bundle_zip(
+                artifacts_dir / "bundle",
+                counts=counts,
+                metadata=count_metadata,
+                summary=summary_dict,
+                tdc_cube=tdc_cube,
+                tdc_metadata=tdc_metadata,
+                events=event_dict,
+                events_metadata=event_metadata,
+            )
+
         except OSError as exc:
             _set_status(job_id, status="failed", error=f"写入产物文件失败: {exc}")
             return

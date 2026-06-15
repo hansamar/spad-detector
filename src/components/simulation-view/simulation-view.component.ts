@@ -280,6 +280,13 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     const job = this.backendJob();
     return job?.status === 'completed' && job.download_url ? this.backendSimulationService.downloadUrl(job.download_url) : '';
   });
+  selectedExportFormat = signal<string>('bundle');
+
+  // ── ToF/TDC diagnostics ──
+  speedOfLightMs = 299792458;
+  tdcBinWidthNs = computed(() => this.timeResolutionPs() / 1000);
+  rangeBinM = computed(() => this.speedOfLightMs * this.tdcBinWidthNs() * 1e-9 / 2);
+  maxUnambiguousRangeM = computed(() => this.speedOfLightMs * this.tdcMaxCount() * this.tdcBinWidthNs() * 1e-9 / 2);
   manualDroneRecordedDuration = computed(() => {
     const samples = this.manualDroneRecordedSamples();
     return samples.length > 0 ? samples[samples.length - 1].time : 0;
@@ -1414,9 +1421,17 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   downloadData() {
     const backendUrl = this.backendDownloadUrl();
     if (backendUrl) {
+      const format = this.selectedExportFormat();
+      const url = `${backendUrl}?format=${format}`;
       const a = document.createElement('a');
-      a.href = backendUrl;
-      a.download = 'spad_simulation_counts.bin';
+      a.href = url;
+      const filenames: Record<string, string> = {
+        count_cube: 'spad_counts.bin',
+        tdc_frame_cube: 'spad_tdc_cube.bin',
+        event_list: 'spad_events.npz',
+        bundle: 'spad_bundle.zip',
+      };
+      a.download = filenames[format] || 'spad_simulation.bin';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
