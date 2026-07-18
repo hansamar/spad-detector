@@ -1,156 +1,123 @@
-<div class="relative h-full w-full overflow-hidden bg-gray-900 text-gray-200 lg:flex">
-  <!-- Control Panel -->
-  <aside
-    class="absolute top-0 left-0 h-full transform bg-gray-800 transition-transform duration-300 ease-in-out z-30 lg:relative lg:translate-x-0 lg:flex-shrink-0 flex"
-    [style.width.px]="panelWidth()" [class]="isPanelOpen() ? 'translate-x-0' : '-translate-x-full'">
-
-    <!-- Content Container -->
-    <div class="flex-grow h-full overflow-y-auto p-4 custom-scrollbar">
-      <div class="flex items-center justify-between mb-6">
-        <h1 class="text-2xl font-bold text-cyan-400">{{ l.t('title')() }}</h1>
-        <div class="flex items-center">
-          <button (click)="l.toggleLanguage()"
-            class="text-sm font-semibold text-cyan-400 hover:text-cyan-300 transition-colors pr-4 lg:pr-0">
-            {{ l.t('languageToggle')() }}
-          </button>
-          <button (click)="isPanelOpen.set(false)" class="text-gray-400 hover:text-white lg:hidden">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
-              stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+<div class="workbench-shell instrument-shell relative flex h-full w-full flex-col overflow-hidden text-slate-800">
+  <header class="workbench-header">
+    <div class="brand-lockup">
+      <div class="brand-mark" aria-hidden="true"><span></span></div>
+      <div class="min-w-0">
+        <p class="brand-kicker">PHOTON WORKBENCH</p>
+        <h1 class="truncate">{{ l.t('title')() }}</h1>
       </div>
+    </div>
 
-      <!-- Simulation Controls -->
-      <div class="mb-6 space-y-3">
-        <button data-testid="run-simulation" (click)="runSimulation()" [disabled]="isSimulating() || isPreviewing() || isBackendSimulating() || !backendCapabilities()"
-          class="w-full bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center">
-          @if (isBackendSimulating()) {
-          <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none"
-            viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
-            </path>
-          </svg>
-          {{ l.t('backendSimulating')() }}
-          } @else {
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
-              clip-rule="evenodd" />
-          </svg>
-          {{ l.t('runSimulation')() }}
+    <div class="header-context" aria-label="当前实验摘要">
+      <div class="context-chip">
+        <span>{{ l.t('targetType')() }}</span>
+        <strong>
+          @switch (targetType()) {
+            @case ('Ball') { {{ l.t('targetTypeBall')() }} }
+            @case ('Drone') { {{ l.t('targetTypeDrone')() }} }
+            @default { {{ l.t('targetTypeBlade')() }} }
           }
-        </button>
+        </strong>
+      </div>
+      <div class="context-chip"><span>{{ l.t('detectorParams')() }}</span><strong>{{ resolutionW() }} × {{ resolutionH() }}</strong></div>
+      <div class="context-chip"><span>{{ l.t('nFrames')() }}</span><strong>{{ nFrames() | number }} 帧</strong></div>
+    </div>
 
-        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-xs space-y-1">
-          <div class="flex justify-between gap-3">
-            <span class="text-gray-400">{{ l.t('backendCompute')() }}</span>
-            <button (click)="refreshBackendCapabilities()" class="text-cyan-300 hover:text-cyan-100 pointer-events-auto">{{ l.t('refresh')() }}</button>
-          </div>
-          @if (backendCapabilities()) {
-            <p class="font-mono text-gray-100">{{ backendCapabilities()?.recommended_backend | uppercase }} / {{ backendCapabilities()?.gpu_name || 'CPU' }}</p>
-            <p class="text-gray-400">Torch {{ backendCapabilities()?.torch_version || 'N/A' }} / CUDA {{ backendCapabilities()?.torch_cuda_version || 'N/A' }}</p>
-          } @else {
-            <p class="text-yellow-300">{{ l.t('backendUnavailable')() }}</p>
-            @if (backendError()) {
-              <p class="text-gray-500 break-all">{{ backendError() }}</p>
-            }
-          }
-        </div>
-
-        <button (click)="previewTrajectory()" [disabled]="isSimulating() || isPreviewing() || isBackendSimulating()"
-          class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24"
-            stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-          </svg>
-          {{ l.t('previewTrajectory')() }}
-        </button>
-
-        <button (click)="downloadData()" [disabled]="!simulationResult() && !backendDownloadUrl()"
-          class="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24"
-            stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
+    <div class="header-actions">
+      <button type="button" (click)="refreshBackendCapabilities()" class="compute-status"
+        [class.compute-status--offline]="!backendCapabilities()" [attr.title]="backendError() || l.t('backendCompute')()">
+        <span class="status-dot"></span>
+        @if (backendCapabilities()) {
+          <span>{{ backendCapabilities()?.recommended_backend | uppercase }}</span>
+        } @else {
+          <span>{{ l.t('backendUnavailable')() }}</span>
+        }
+      </button>
+      <button type="button" (click)="previewTrajectory()" [disabled]="isPreviewing() || isBackendSimulating()"
+        class="button-secondary header-secondary">
+        {{ isPreviewing() ? l.t('simulating')() : l.t('previewTrajectory')() }}
+      </button>
+      @if (simulationResult() || backendDownloadUrl()) {
+        <button type="button" (click)="downloadData()" [disabled]="isBackendSimulating()" class="button-secondary header-secondary">
           {{ l.t('downloadData')() }}
         </button>
+      }
+      <button data-testid="run-simulation" type="button" (click)="runSimulation()"
+        [disabled]="isPreviewing() || isBackendSimulating() || !backendCapabilities()" class="button-primary run-button">
+        @if (isBackendSimulating()) { <span class="button-spinner" aria-hidden="true"></span> }
+        <span>{{ isBackendSimulating() ? l.t('backendSimulating')() : l.t('runSimulation')() }}</span>
+      </button>
+      <button type="button" (click)="l.toggleLanguage()" class="language-button" [attr.aria-label]="l.t('languageToggle')()">
+        {{ l.t('languageToggle')() }}
+      </button>
+    </div>
+  </header>
 
-        <!-- Export format selector -->
-        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-xs space-y-1">
-          <label class="text-gray-400 block mb-1">{{ l.t('exportFormat')() }}</label>
-          <select
-            [value]="selectedExportFormat()"
-            (change)="selectedExportFormat.set($any($event.target).value)"
-            class="w-full bg-gray-700 text-gray-200 rounded p-1 text-xs border border-gray-600">
-            <option value="bundle">Bundle (.zip) — 推荐</option>
-            <option value="count_cube">Count Cube (.bin)</option>
-            <option value="tdc_frame_cube">TDC Frame Cube (.bin)</option>
-            <option value="event_list">Event List (.npz)</option>
-          </select>
-        </div>
+  <div class="workbench-body">
+    <nav class="workflow-rail" aria-label="仿真配置流程">
+      <button data-testid="workspace-step-scene" type="button" (click)="setWorkspaceStep('scene')"
+        [class.is-active]="activeWorkspaceStep() === 'scene'" [attr.aria-pressed]="activeWorkspaceStep() === 'scene'">
+        <span class="step-index">01</span><span class="step-label">{{ l.t('workflowScene')() }}</span>
+      </button>
+      <button data-testid="workspace-step-optics" type="button" (click)="setWorkspaceStep('optics')"
+        [class.is-active]="activeWorkspaceStep() === 'optics'" [attr.aria-pressed]="activeWorkspaceStep() === 'optics'">
+        <span class="step-index">02</span><span class="step-label">{{ l.t('workflowOptics')() }}</span>
+      </button>
+      <button data-testid="workspace-step-detector" type="button" (click)="setWorkspaceStep('detector')"
+        [class.is-active]="activeWorkspaceStep() === 'detector'" [attr.aria-pressed]="activeWorkspaceStep() === 'detector'">
+        <span class="step-index">03</span><span class="step-label">{{ l.t('workflowDetector')() }}</span>
+      </button>
+      <button data-testid="workspace-step-sampling" type="button" (click)="setWorkspaceStep('sampling')"
+        [class.is-active]="activeWorkspaceStep() === 'sampling'" [attr.aria-pressed]="activeWorkspaceStep() === 'sampling'">
+        <span class="step-index">04</span><span class="step-label">{{ l.t('workflowSampling')() }}</span>
+      </button>
+    </nav>
 
-        <!-- ToF/TDC Diagnostics Panel -->
-        <div class="rounded border border-cyan-700/60 bg-cyan-950/20 p-3 text-xs space-y-2">
-          <h3 class="text-cyan-300 font-semibold text-sm">ToF / TDC 诊断</h3>
-          <div class="grid grid-cols-2 gap-x-2 gap-y-1">
-            <span class="text-gray-400">Frame duration</span>
-            <span class="text-gray-200 text-right">{{ frameDurationUs() | number:'1.1-2' }} µs</span>
+  <aside
+    class="instrument-panel relative z-30 flex h-full"
+    [style.width.px]="panelWidth()">
 
-            <span class="text-gray-400">Sample rate</span>
-            <span class="text-gray-200 text-right">{{ (1e6 / frameDurationUs()) | number:'1.0-0' }} Hz</span>
-
-            <span class="text-gray-400">Number of frames</span>
-            <span class="text-gray-200 text-right">{{ nFrames() }}</span>
-
-            <span class="text-gray-400">Total observation</span>
-            <span class="text-gray-200 text-right">{{ (nFrames() * frameDurationUs() / 1e6) | number:'1.3-3' }} s</span>
-
-            <span class="text-gray-400 !mt-2" style="margin-top:0.5rem">TDC bin width</span>
-            <span class="text-gray-200 text-right !mt-2" style="margin-top:0.5rem">{{ tdcBinWidthNs() | number:'1.3-3' }} ns</span>
-
-            <span class="text-gray-400">TDC max count</span>
-            <span class="text-gray-200 text-right">{{ tdcMaxCount() }}</span>
-
-            <span class="text-gray-400">Range bin</span>
-            <span class="text-gray-200 text-right">{{ rangeBinM() | number:'1.3-3' }} m</span>
-
-            <span class="text-gray-400">Max unambiguous range</span>
-            <span class="text-gray-200 text-right">{{ maxUnambiguousRangeM() | number:'1.1-1' }} m</span>
-
-            <span class="text-gray-400">Timing jitter (σ)</span>
-            <span class="text-gray-200 text-right">{{ timingJitterNs() | number:'1.3-3' }} ns</span>
+    <div class="inspector-scroll custom-scrollbar">
+      <div class="inspector-intro">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="instrument-overline">
+              @switch (activeWorkspaceStep()) {
+                @case ('scene') { 01 / {{ l.t('workflowScene')() }} }
+                @case ('optics') { 02 / {{ l.t('workflowOptics')() }} }
+                @case ('detector') { 03 / {{ l.t('workflowDetector')() }} }
+                @default { 04 / {{ l.t('workflowSampling')() }} }
+              }
+            </p>
+            <h2>
+              @switch (activeWorkspaceStep()) {
+                @case ('scene') { {{ l.t('targetParams')() }} }
+                @case ('optics') { {{ l.t('envLaser')() }} }
+                @case ('detector') { {{ l.t('detectorParams')() }} }
+                @default { {{ l.t('simSettings')() }} }
+              }
+            </h2>
           </div>
-          <p class="text-gray-500 leading-relaxed !mt-2" style="margin-top:0.5rem">
-            <strong>frameDurationUs</strong> 控制主仿真帧积分时间。<br/>
-            <strong>timeResolutionPs</strong> 控制 ToF/TDC bin 宽度。<br/>
-            <strong>nFrames</strong> 是主时间帧数，不是 ToF bin 数。
-          </p>
         </div>
-        @if (backendJob() && backendJob()?.status !== 'completed') {
-          <div class="rounded border border-cyan-700/50 bg-cyan-950/30 p-3 text-xs text-cyan-100">
-            {{ l.t('backendJobStatus')() }}:
-            <span class="font-mono">{{ backendJob()?.status }}</span>
-          </div>
-        }
+        <p class="inspector-description">
+          @switch (activeWorkspaceStep()) {
+            @case ('scene') { {{ l.t('workflowSceneDesc')() }} }
+            @case ('optics') { {{ l.t('workflowOpticsDesc')() }} }
+            @case ('detector') { {{ l.t('workflowDetectorDesc')() }} }
+            @default { {{ l.t('workflowSamplingDesc')() }} }
+          }
+        </p>
+        <div class="configuration-snapshot">
+          <div><span>距离分辨率</span><strong>{{ distanceResolution() | number:'1.3-3' }} m</strong></div>
+          <div><span>观测时长</span><strong>{{ (nFrames() * frameDurationUs() / 1e6) | number:'1.3-3' }} s</strong></div>
+          <div><span>工作集</span><strong>{{ simulationBudget().estimatedWorkingSetMb | number:'1.0-0' }} MB</strong></div>
+        </div>
       </div>
 
-      <!-- Parameter Accordions -->
-      <div class="space-y-2">
+      <div class="parameter-workspace">
         <!-- Target Settings -->
-        <details class="bg-gray-700/50 rounded-lg" [open]="targetSettingsOpen()">
-          <summary (click)="$event.preventDefault(); targetSettingsOpen.set(!targetSettingsOpen())"
-            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
-            {{ l.t('targetParams')() }}
-            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!targetSettingsOpen()">▼</span>
-          </summary>
-          <div class="p-4 border-t border-gray-600 space-y-4">
+        <section data-testid="workspace-panel-scene" class="parameter-section" [class.hidden]="activeWorkspaceStep() !== 'scene'">
+          <div class="space-y-4">
             <div>
               <label class="text-sm mb-2 block">{{ l.t('targetType')() }}</label>
               <div class="grid grid-cols-3 gap-2">
@@ -656,16 +623,11 @@
             </div>
             }
           </div>
-        </details>
+        </section>
 
         <!-- Detector Settings -->
-        <details class="bg-gray-700/50 rounded-lg" [open]="detectorSettingsOpen()">
-          <summary (click)="$event.preventDefault(); detectorSettingsOpen.set(!detectorSettingsOpen())"
-            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
-            {{ l.t('detectorParams')() }}
-            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!detectorSettingsOpen()">▼</span>
-          </summary>
-          <div class="p-4 border-t border-gray-600 space-y-4">
+        <section data-testid="workspace-panel-detector" class="parameter-section" [class.hidden]="activeWorkspaceStep() !== 'detector'">
+          <div class="space-y-4">
             <div>
               <label class="text-sm mb-2 block">{{ l.t('detectorPreset')() }}</label>
               <select [value]="selectedDetectorPresetId()" (change)="onDetectorPresetChange($event)"
@@ -753,29 +715,11 @@
               </div>
             </div>
           </div>
-        </details>
+        </section>
 
         <!-- Environment & Laser -->
-        <details class="bg-gray-700/50 rounded-lg" [open]="envSettingsOpen()">
-          <summary (click)="$event.preventDefault(); envSettingsOpen.set(!envSettingsOpen())"
-            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
-            {{ l.t('envLaser')() }}
-            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!envSettingsOpen()">▼</span>
-          </summary>
-          <div class="p-4 border-t border-gray-600 space-y-4">
-            <div>
-              <label class="text-sm mb-2 block">环境场景 / Environment</label>
-              <div class="grid grid-cols-1 gap-2">
-                @for (preset of environmentPresets; track preset.id) {
-                <button (click)="selectedEnvironmentPresetId.set(preset.id)"
-                  [class]="selectedEnvironmentPresetId() === preset.id ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
-                  class="w-full text-left font-semibold py-2 px-3 rounded-lg transition-colors text-sm">
-                  <span>{{ preset.labelZh }}</span>
-                  <span class="block text-[11px] opacity-75">{{ preset.label }} · V {{ preset.visibilityKm }} km · Sun {{ preset.solarScale }}</span>
-                </button>
-                }
-              </div>
-            </div>
+        <section data-testid="workspace-panel-optics" class="parameter-section" [class.hidden]="activeWorkspaceStep() !== 'optics'">
+          <div class="space-y-4">
             <div>
               <div class="flex justify-between items-center">
                 <label class="text-sm">大气能见度 / Visibility</label>
@@ -802,10 +746,35 @@
               </div>
             </div>
             <div>
+              <label class="text-sm mb-2 block">{{ l.t('backgroundNoiseMode')() }}</label>
+              <div class="grid grid-cols-2 gap-2">
+                <button (click)="backgroundNoiseMode.set('solar_environment')"
+                  [class]="backgroundNoiseMode() === 'solar_environment' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('backgroundNoiseSolar')() }}
+                </button>
+                <button (click)="backgroundNoiseMode.set('manual_sbr')"
+                  [class]="backgroundNoiseMode() === 'manual_sbr' ? 'bg-cyan-600 text-white' : 'bg-gray-900 hover:bg-gray-700'"
+                  class="w-full font-bold py-2 px-4 rounded-lg transition-colors">
+                  {{ l.t('backgroundNoiseManualSbr')() }}
+                </button>
+              </div>
+            </div>
+            <div>
               <label class="text-sm">{{ l.t('solarIrradiance')() }}</label>
               <input data-testid="solar-irradiance" type="number" step="0.001" min="0" [value]="solarIrradiance()"
-                (input)="onNumberInput(solarIrradiance, $event)" class="w-full bg-gray-900 rounded p-2 text-sm">
+                [disabled]="backgroundNoiseMode() === 'manual_sbr'"
+                (input)="onNumberInput(solarIrradiance, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
             </div>
+            @if (backgroundNoiseMode() === 'manual_sbr') {
+            <div>
+              <label class="text-sm">{{ l.t('manualSignalBackgroundRatio')() }}</label>
+              <input type="number" step="0.1" min="0.001" [value]="manualSignalBackgroundRatio()"
+                (input)="onNumberInput(manualSignalBackgroundRatio, $event)"
+                class="w-full bg-gray-900 rounded p-2 text-sm">
+            </div>
+            }
             <div class="flex items-center justify-between">
               <label class="text-sm">{{ l.t('atmosphericAttenuation')() }}</label>
               <label class="relative inline-flex items-center cursor-pointer">
@@ -886,16 +855,11 @@
               }
             </div>
           </div>
-        </details>
+        </section>
 
         <!-- Simulation Settings -->
-        <details class="bg-gray-700/50 rounded-lg" [open]="simSettingsOpen()">
-          <summary (click)="$event.preventDefault(); simSettingsOpen.set(!simSettingsOpen())"
-            class="p-3 font-semibold cursor-pointer select-none flex justify-between">
-            {{ l.t('simSettings')() }}
-            <span class="text-cyan-400 transition-transform" [class.rotate-180]="!simSettingsOpen()">▼</span>
-          </summary>
-          <div class="p-4 border-t border-gray-600 space-y-4">
+        <section data-testid="workspace-panel-sampling" class="parameter-section" [class.hidden]="activeWorkspaceStep() !== 'sampling'">
+          <div class="space-y-4">
             <div><label class="text-sm">{{ l.t('nFrames')() }}</label><input data-testid="n-frames" type="number" [value]="nFrames()"
                 (input)="onNumberInput(nFrames, $event)" class="w-full bg-gray-900 rounded p-2 text-sm"></div>
             <div class="rounded border p-3 text-xs space-y-2" [class]="simulationBudgetStatus().class">
@@ -912,53 +876,73 @@
                 <p>{{ l.t('recommendedFrames')() }}: <span class="font-mono">{{ recommendedFrames() | number }}</span></p>
               }
             </div>
+            <div class="diagnostic-card">
+              <div class="diagnostic-card__title">
+                <div><span class="instrument-overline">READINESS</span><h3>ToF / TDC 采样摘要</h3></div>
+                <span class="readiness-badge" [class.readiness-badge--warning]="simulationBudget().level !== 'safe'">
+                  {{ simulationBudget().level === 'safe' ? '可运行' : '需检查' }}
+                </span>
+              </div>
+              <dl class="diagnostic-grid">
+                <div><dt>采样率</dt><dd>{{ (1e6 / frameDurationUs()) | number:'1.0-0' }} Hz</dd></div>
+                <div><dt>TDC bin</dt><dd>{{ tdcBinWidthNs() | number:'1.3-3' }} ns</dd></div>
+                <div><dt>距离 bin</dt><dd>{{ rangeBinM() | number:'1.3-3' }} m</dd></div>
+                <div><dt>无模糊距离</dt><dd>{{ maxUnambiguousRangeM() | number:'1.1-1' }} m</dd></div>
+                <div><dt>计时抖动 σ</dt><dd>{{ timingJitterNs() | number:'1.3-3' }} ns</dd></div>
+                <div><dt>TDC 最大码</dt><dd>{{ tdcMaxCount() | number }}</dd></div>
+              </dl>
+            </div>
+            <div class="export-card">
+              <label for="export-format">{{ l.t('exportFormat')() }}</label>
+              <div class="export-row">
+                <select id="export-format" [value]="selectedExportFormat()" (change)="selectedExportFormat.set($any($event.target).value)">
+                  <option value="bundle">Bundle (.zip) — 推荐</option>
+                  <option value="count_cube">Count Cube (.bin)</option>
+                  <option value="tdc_frame_cube">TDC Frame Cube (.bin)</option>
+                  <option value="event_list">Event List (.npz)</option>
+                </select>
+                <button type="button" (click)="downloadData()" [disabled]="isBackendSimulating() || (!simulationResult() && !backendDownloadUrl())"
+                  class="button-secondary">{{ l.t('downloadData')() }}</button>
+              </div>
+              <p>运行完成后按需生成数据制品，普通仿真不会提前占用导出内存。</p>
+            </div>
+            @if (backendJob() && backendJob()?.status !== 'completed') {
+              <div class="job-status"><span class="button-spinner"></span>{{ l.t('backendJobStatus')() }}：<strong>{{ backendJob()?.status }}</strong></div>
+            }
           </div>
-        </details>
+        </section>
       </div>
     </div>
 
     <!-- Resize Handle -->
     <div
-      class="w-1.5 h-full cursor-col-resize hover:bg-cyan-500 bg-gray-900/30 flex-shrink-0 hidden lg:block transition-colors"
+      class="inspector-resize-handle hidden lg:block"
       (mousedown)="startResize($event)"></div>
   </aside>
 
-  <!-- Backdrop for mobile -->
-  @if (isPanelOpen()) {
-  <div (click)="isPanelOpen.set(false)" class="absolute inset-0 bg-black/50 z-20 lg:hidden"></div>
-  }
-
   <!-- 3D Viewport -->
-  <main #canvasContainer class="flex-grow h-full relative">
-    <canvas #rendererCanvas class="w-full h-full block"></canvas>
-
-    <!-- Hamburger Menu for Mobile -->
-    <button (click)="isPanelOpen.set(true)"
-      class="absolute top-4 left-4 bg-gray-800/70 p-2 rounded-md text-white z-10 lg:hidden">
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
-      </svg>
-    </button>
+  <main #canvasContainer class="simulation-canvas relative h-full flex-grow">
+    <canvas #rendererCanvas class="block h-full w-full"></canvas>
 
     <div
-      class="absolute top-4 left-20 right-4 lg:left-4 bg-gray-950/75 border border-cyan-700/40 rounded-md px-3 py-2 text-xs pointer-events-none backdrop-blur">
+      class="scene-hud absolute left-4 top-4 w-[min(46rem,calc(100%-2rem))] px-3 py-2 text-xs pointer-events-none">
       <div class="grid gap-2 md:grid-cols-2 2xl:grid-cols-4">
         <div>
           <p class="text-gray-400">{{ l.t('activeDrone')() }}</p>
-          <p class="font-semibold text-cyan-200 truncate">{{ selectedDronePreset().model }}</p>
+          <p class="font-semibold text-slate-800 truncate">{{ selectedDronePreset().model }}</p>
         </div>
         <div>
           <p class="text-gray-400">{{ l.t('dronePosition')() }}</p>
-          <p class="font-mono text-gray-100">X {{ activeDronePosition().x | number:'1.1-1' }} / Y {{ activeDronePosition().y | number:'1.1-1' }} / Z {{ activeDronePosition().z | number:'1.1-1' }}</p>
+          <p class="font-mono text-slate-800">X {{ activeDronePosition().x | number:'1.1-1' }} / Y {{ activeDronePosition().y | number:'1.1-1' }} / Z {{ activeDronePosition().z | number:'1.1-1' }}</p>
         </div>
         <div>
           <p class="text-gray-400">{{ l.t('laserVisual')() }}</p>
-          <p class="font-mono text-gray-100"><span class="inline-block h-2.5 w-2.5 rounded-full mr-1"
+          <p class="font-mono text-slate-800"><span class="inline-block h-2.5 w-2.5 rounded-full mr-1"
               [style.background]="laserCssColor()"></span>{{ laserWavelengthNm() }} nm</p>
         </div>
         <div>
           <p class="text-gray-400">{{ l.t('telescopeModel')() }}</p>
-          <p class="font-mono text-gray-100">D {{ apertureDiameter() | number:'1.3-3' }} m / FOV {{ detectorFov() }}° / f {{ telescopeFocalLength() | number:'1.2-2' }} m</p>
+          <p class="font-mono text-slate-800">D {{ apertureDiameter() | number:'1.3-3' }} m / FOV {{ detectorFov() }}° / f {{ telescopeFocalLength() | number:'1.2-2' }} m</p>
         </div>
       </div>
     </div>
@@ -966,112 +950,21 @@
     <!-- Combined Detector View & Controls -->
     <div class="absolute bottom-4 left-4 flex flex-col-reverse gap-2 items-start pointer-events-none">
       <!-- Controls Info -->
-      <div class="bg-gray-900/50 p-2 rounded-lg text-xs">
+      <div class="scene-help p-2 text-xs">
         <p><strong>{{ l.t('controlsTitle')() }}</strong> {{ bladeMotionType() === 'Manual' && targetType() === 'Drone' ? l.t('manualControlsInfo')() : l.t('controlsInfo')() }}</p>
       </div>
       <!-- Detector View Frame -->
-      <div #detectorViewport class="relative h-[22.22vh] border-2 border-cyan-500/50 rounded-md bg-black/30"
+      <div #detectorViewport data-testid="detector-viewport" class="detector-preview relative h-[22.22vh]"
         [style.aspect-ratio]="resolutionW() / resolutionH()">
         <p class="absolute top-1 left-2 text-xs text-cyan-400 font-semibold">{{ l.t('detectorView')() }}</p>
       </div>
     </div>
   </main>
 
-  <!-- Results Modal -->
-  @if (showResultsModal()) {
-  <div data-testid="results-modal" class="absolute inset-0 bg-black/60 flex items-center justify-center p-4 z-40"
-    (click)="showResultsModal.set(false)">
-    <div (click)="$event.stopPropagation()"
-      class="bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl text-gray-200 max-h-[90vh] overflow-y-auto">
-      <div class="flex justify-between items-center mb-4">
-        <h2 class="text-2xl font-bold text-cyan-400">{{ l.t('resultsTitle')() }}</h2>
-        <button data-testid="close-results" (click)="showResultsModal.set(false)"
-          class="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
-      </div>
-
-      @if (backendSummary()) {
-      <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-center">
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('backendMode')() }}</p>
-          <p class="text-2xl font-semibold text-cyan-300">{{ backendSummary()?.sample_backend | uppercase }}</p>
-        </div>
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('observedCounts')() }}</p>
-          <p class="text-2xl font-semibold text-green-400">{{ backendSummary()?.observed_total_counts | number }}</p>
-        </div>
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('snrDb')() }}</p>
-          <p class="text-2xl font-semibold text-blue-400">{{ backendSummary()?.snr_db | number:'1.1-2' }} dB</p>
-        </div>
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('deadTimeLoss')() }}</p>
-          <p class="text-2xl font-semibold text-yellow-400">{{ backendSummary()?.dead_time_loss_ratio | percent:'1.1-1' }}</p>
-        </div>
-      </div>
-      <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-sm">
-        <div>{{ l.t('signalPhotons')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.total_signal_photons | number:'1.0-0' }}</span></div>
-        <div>{{ l.t('backgroundPhotons')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.total_background_photons | number:'1.0-0' }}</span></div>
-        <div>{{ l.t('laserSignalRate')() }} <span data-testid="laser-signal-rate" class="font-mono text-cyan-200">{{ backendSummary()?.target_laser_detected_rate_cps | number:'1.0-0' }} cps</span></div>
-        <div>{{ l.t('solarSignalRate')() }} <span data-testid="solar-signal-rate" class="font-mono text-cyan-200">{{ backendSummary()?.target_solar_detected_rate_cps | number:'1.0-0' }} cps</span></div>
-        <div>{{ l.t('visibilityRatio')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.visibility_ratio | percent:'1.1-1' }}</span></div>
-        <div>{{ l.t('sampleRate')() }} <span class="font-mono text-cyan-200">{{ backendSummary()?.sample_rate_hz | number:'1.0-0' }} Hz</span></div>
-      </div>
-      @if (backendSummary()?.saturation_warning) {
-      <div class="bg-yellow-950/40 border border-yellow-700/50 text-yellow-100 p-3 rounded-lg mb-4 text-sm">
-        {{ l.t('saturationWarning')() }}
-      </div>
-      }
-      }
-      @if (!backendSummary()) {
-      <div class="bg-gray-900 p-4 rounded-lg mb-4 grid grid-cols-2 gap-4 text-center">
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('detectedPhotons')() }}</p>
-          <p class="text-2xl font-semibold text-green-400">{{ simulationResult()?.detectedPhotons | number }}</p>
-        </div>
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('noisePhotons')() }}</p>
-          <p class="text-2xl font-semibold text-yellow-400">{{ simulationResult()?.noiseEvents | number }}</p>
-        </div>
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('incidentPhotons')() }}</p>
-          <p class="text-2xl font-semibold text-blue-400">{{ simulationResult()?.incidentPhotons | number:'1.0-0' }}</p>
-        </div>
-        <div>
-          <p class="text-sm text-gray-400">{{ l.t('peakPileup')() }}</p>
-          <div class="text-xl font-semibold" [class]="pileUpStatus().class">
-            <span>{{ pileUpFactor() | number:'1.3-3' }}</span>
-            <span class="text-sm ml-1"> ({{ l.t(pileUpStatus().textKey)() }})</span>
-          </div>
-        </div>
-      </div>
-      }
-
-      @if (backendError()) {
-      <div class="bg-yellow-950/40 border border-yellow-700/50 text-yellow-100 p-3 rounded-lg mb-4 text-sm">
-        {{ backendError() }}
-      </div>
-      }
-
-      @if (simulationResult()) {
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div class="text-center">
-          <h3 class="font-semibold mb-2">{{ l.t('photonCounting')() }}</h3>
-          <canvas #photonCountingCanvas class="w-full h-auto aspect-square border border-gray-600 rounded"
-            style="image-rendering: pixelated;"></canvas>
-        </div>
-        <div class="text-center">
-          <h3 class="font-semibold mb-2">{{ l.t('groundTruth')() }}</h3>
-          <canvas #groundTruthCanvas class="w-full h-auto aspect-square border border-gray-600 rounded"
-            style="image-rendering: pixelated;"></canvas>
-        </div>
-        <div class="text-center">
-          <h3 class="font-semibold mb-2">{{ l.t('incidentPhotonsCanvas')() }}</h3>
-          <canvas #incidentPhotonsCanvas class="w-full h-auto aspect-square border border-gray-600 rounded"
-            style="image-rendering: pixelated;"></canvas>
-        </div>
-      </div>
-      }
-    </div>
   </div>
+
+  @if (showResultsModal()) {
+  <app-simulation-results [result]="simulationResult()" [summary]="backendSummary()" [error]="backendError()"
+    [tdcMaxCount]="tdcMaxCount()" (close)="showResultsModal.set(false)" />
   }
 </div>

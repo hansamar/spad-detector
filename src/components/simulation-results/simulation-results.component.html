@@ -1,0 +1,63 @@
+<div data-testid="results-modal" class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6"
+  role="dialog" aria-modal="true" [attr.aria-label]="l.t('resultsTitle')()" (click)="requestClose()">
+  <section (click)="$event.stopPropagation()"
+    class="instrument-card max-h-[94dvh] w-full max-w-6xl overflow-y-auto rounded-2xl border-slate-200 bg-white p-4 shadow-2xl sm:p-6">
+    <header class="mb-5 flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+      <div>
+        <p class="instrument-overline">Photon analysis report</p>
+        <h2 class="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{{ l.t('resultsTitle')() }}</h2>
+      </div>
+      <button data-testid="close-results" type="button" (click)="requestClose()"
+        class="grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-slate-50 text-xl text-slate-500 transition hover:border-teal-600/40 hover:bg-white hover:text-teal-800"
+        aria-label="关闭">×</button>
+    </header>
+
+    @if (summary(); as backend) {
+    <div class="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="instrument-card rounded-xl bg-slate-50 p-4"><p class="text-xs uppercase tracking-widest text-slate-500">{{ l.t('backendMode')() }}</p><p class="mt-2 text-2xl font-semibold text-teal-700">{{ backend.sample_backend | uppercase }}</p></div>
+      <div class="instrument-card rounded-xl bg-slate-50 p-4"><p class="text-xs uppercase tracking-widest text-slate-500">{{ l.t('observedCounts')() }}</p><p class="mt-2 text-2xl font-semibold text-emerald-700">{{ backend.observed_total_counts | number }}</p></div>
+      <div class="instrument-card rounded-xl bg-slate-50 p-4"><p class="text-xs uppercase tracking-widest text-slate-500">{{ l.t('snrDb')() }}</p><p class="mt-2 text-2xl font-semibold text-sky-700">{{ backend.snr_db | number:'1.1-2' }} dB</p></div>
+      <div class="instrument-card rounded-xl bg-slate-50 p-4"><p class="text-xs uppercase tracking-widest text-slate-500">{{ l.t('deadTimeLoss')() }}</p><p class="mt-2 text-2xl font-semibold text-amber-700">{{ backend.dead_time_loss_ratio | percent:'1.1-1' }}</p></div>
+    </div>
+    <div class="instrument-card mb-4 grid gap-3 rounded-xl p-4 text-sm text-slate-600 sm:grid-cols-2 lg:grid-cols-3">
+      <div>{{ l.t('signalPhotons')() }} <span class="font-mono font-semibold text-teal-700">{{ backend.total_signal_photons | number:'1.0-0' }}</span></div>
+      <div>{{ l.t('backgroundPhotons')() }} <span class="font-mono font-semibold text-teal-700">{{ backend.total_background_photons | number:'1.0-0' }}</span></div>
+      <div>{{ l.t('laserSignalRate')() }} <span data-testid="laser-signal-rate" class="font-mono font-semibold text-teal-700">{{ backend.target_laser_detected_rate_cps | number:'1.0-0' }} cps</span></div>
+      <div>{{ l.t('solarSignalRate')() }} <span data-testid="solar-signal-rate" class="font-mono font-semibold text-teal-700">{{ backend.target_solar_detected_rate_cps | number:'1.0-0' }} cps</span></div>
+      <div>{{ l.t('visibilityRatio')() }} <span class="font-mono font-semibold text-teal-700">{{ backend.visibility_ratio | percent:'1.1-1' }}</span></div>
+      <div>{{ l.t('sampleRate')() }} <span class="font-mono font-semibold text-teal-700">{{ backend.sample_rate_hz | number:'1.0-0' }} Hz</span></div>
+    </div>
+    @if (backend.saturation_warning) {
+    <div class="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">{{ l.t('saturationWarning')() }}</div>
+    }
+    } @else {
+    <div class="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="instrument-card rounded-xl p-4"><p class="text-xs text-slate-500">{{ l.t('detectedPhotons')() }}</p><p class="mt-2 text-2xl font-semibold text-emerald-700">{{ result()?.detectedPhotons | number }}</p></div>
+      <div class="instrument-card rounded-xl p-4"><p class="text-xs text-slate-500">{{ l.t('noisePhotons')() }}</p><p class="mt-2 text-2xl font-semibold text-amber-700">{{ result()?.noiseEvents | number }}</p></div>
+      <div class="instrument-card rounded-xl p-4"><p class="text-xs text-slate-500">{{ l.t('incidentPhotons')() }}</p><p class="mt-2 text-2xl font-semibold text-sky-700">{{ result()?.incidentPhotons | number:'1.0-0' }}</p></div>
+      <div class="instrument-card rounded-xl p-4"><p class="text-xs text-slate-500">{{ l.t('peakPileup')() }}</p><p class="mt-2 text-xl font-semibold" [class]="pileUpStatus.className">{{ pileUpFactor | number:'1.3-3' }} <span class="text-xs">{{ l.t(pileUpStatus.textKey)() }}</span></p></div>
+    </div>
+    }
+
+    @if (error()) {
+    <div class="mb-4 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800">{{ error() }}</div>
+    }
+
+    @if (result()) {
+    @if (frequencyStats; as stats) {
+    <section class="instrument-card mb-4 rounded-xl p-4">
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 class="font-semibold text-slate-800">{{ l.t('mechanicalFrequencyChart')() }}</h3>
+        <span data-testid="mechanical-frequency-mean" class="font-mono text-xs font-semibold text-teal-700">mean {{ stats.mean | number:'1.1-2' }} Hz · range {{ stats.min | number:'1.1-2' }}–{{ stats.max | number:'1.1-2' }} Hz</span>
+      </div>
+      <canvas #mechanicalFrequencyCanvas class="h-44 w-full rounded-lg border border-slate-200 bg-white"></canvas>
+    </section>
+    }
+    <div class="grid gap-4 md:grid-cols-3">
+      <figure class="instrument-card rounded-xl p-3 text-center"><figcaption class="mb-2 text-sm font-semibold text-slate-700">{{ l.t('photonCounting')() }}</figcaption><canvas #photonCountingCanvas class="aspect-square w-full rounded-lg border border-slate-200" style="image-rendering:pixelated"></canvas></figure>
+      <figure class="instrument-card rounded-xl p-3 text-center"><figcaption class="mb-2 text-sm font-semibold text-slate-700">{{ l.t('groundTruth')() }}</figcaption><canvas #groundTruthCanvas class="aspect-square w-full rounded-lg border border-slate-200" style="image-rendering:pixelated"></canvas></figure>
+      <figure class="instrument-card rounded-xl p-3 text-center"><figcaption class="mb-2 text-sm font-semibold text-slate-700">{{ l.t('incidentPhotonsCanvas')() }}</figcaption><canvas #incidentPhotonsCanvas class="aspect-square w-full rounded-lg border border-slate-200" style="image-rendering:pixelated"></canvas></figure>
+    </div>
+    }
+  </section>
+</div>

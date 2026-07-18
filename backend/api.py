@@ -22,6 +22,7 @@ async def get_capabilities():
 async def run_simulation(req: SimulateRequest):
     try:
         params = params_from_request(req)
+        params.summary_only = False
         from starlette.concurrency import run_in_threadpool
         result = await run_in_threadpool(simulate_active_spad, params)
         return result_to_response(result, None)
@@ -33,6 +34,7 @@ async def run_simulation(req: SimulateRequest):
 async def run_simulation_summary(req: SimulateRequest):
     try:
         params = params_from_request(req)
+        params.summary_only = True
         from starlette.concurrency import run_in_threadpool
         result = await run_in_threadpool(simulate_active_spad, params)
         return result_to_summary_response(result, None)

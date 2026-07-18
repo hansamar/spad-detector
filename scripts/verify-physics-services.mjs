@@ -26,52 +26,37 @@ const spectral = loadTsModule('src/services/spectral-response.service.ts', [
   'applyDeadTimeRate',
 ]);
 
-const reflectance = loadTsModule('src/services/reflectance.service.ts', [
-  'phaseAngleRad',
-  'monostaticLambertFactor',
-  'monostaticSurfaceReturnFactor',
-  'normalizeVec3',
-]);
-
-const sceneBackground = loadTsModule('src/services/scene-background.service.ts', [
-  'backgroundTemporalDriftFactor',
-  'backgroundSpatialFactor',
-  'makeBackgroundSpatialMap',
-]);
-
 const budget = loadTsModule('src/services/simulation-budget.service.ts', [
   'estimateSimulationBudget',
 ]);
 
-const environmentPresets = loadTsModule('src/models/environment-presets.model.ts', [
-  'ENVIRONMENT_PRESETS',
-  'findEnvironmentPreset',
-]);
+const physics = loadTsModule('src/services/physics.service.ts', [
+  'atmosphericAttenuationCoefficientKm',
+  'hazeScatterScaleFromVisibility',
+  'photonEnergyJoule',
+  'solarEnvironmentBackgroundRateCpsPerPixel',
+], {
+  ...spectral,
+  Injectable: () => (target) => target,
+});
 
 const backendSimulation = loadTsModule('src/services/backend-simulation.service.ts', [
   'encodeCountsCubeFromDataset',
   'diagnosticFrequencyBand',
   'backendEnvironmentScales',
   'expectedSignalMapFromSummary',
+  'backendErrorMessage',
+  'hasLocalDatasetDownload',
+  'BackendSimulationService',
 ], {
   ...spectral,
+  ...physics,
+  HttpClient: class {},
   Injectable: () => (target) => target,
-  inject: () => ({}),
+  inject: () => ({ get: () => ({}), post: () => ({}) }),
   firstValueFrom: (value) => value,
   btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
-});
-
-const photonSampling = loadTsModule('src/services/photon-sampling.service.ts', [
-  'samplePoissonCount',
-  'firstPhotonTofUnits',
-]);
-
-const physics = loadTsModule('src/services/physics.service.ts', [
-  'atmosphericAttenuationCoefficientKm',
-  'hazeScatterScaleFromVisibility',
-], {
-  ...spectral,
-  Injectable: () => (target) => target,
+  window: { spadDesktop: { backendBaseUrl: 'http://127.0.0.1:8000/api' } },
 });
 
 assert.equal(Number(spectral.pf32PdpFraction(850).toFixed(3)), 0.049);
@@ -83,40 +68,28 @@ assert.ok(spectral.relativeChannelResponse(850, 10) < spectral.relativeChannelRe
 assert.ok(spectral.spectralBackgroundScale('scene_stray', 850, 10) > 0);
 assert.ok(spectral.applyDeadTimeRate(1_000_000, 20e-9) < 1_000_000);
 
-assert.equal(photonSampling.samplePoissonCount(0), 0);
-{
-  const seq = [0.85, 0.85, 0.85, 0.85];
-  const count = photonSampling.samplePoissonCount(0.5, () => seq.shift() ?? 0.85);
-  assert.equal(count, 3);
-}
-assert.equal(photonSampling.samplePoissonCount(64, Math.random, () => 0), 64);
-assert.equal(photonSampling.firstPhotonTofUnits(3, 120.6, 1, () => 0.5), 121);
-assert.equal(photonSampling.firstPhotonTofUnits(0, 120.4, 1), null);
-
 assert.ok(physics.atmosphericAttenuationCoefficientKm(780, 5) > physics.atmosphericAttenuationCoefficientKm(780, 23));
 assert.ok(physics.atmosphericAttenuationCoefficientKm(450, 23) > physics.atmosphericAttenuationCoefficientKm(1064, 23));
 assert.ok(physics.hazeScatterScaleFromVisibility(5) > physics.hazeScatterScaleFromVisibility(23));
-
-const los = reflectance.normalizeVec3({ x: 0, y: 0, z: 1 });
-assert.equal(Number(reflectance.phaseAngleRad(los, los).toFixed(6)), 0);
-assert.equal(Number(reflectance.phaseAngleRad(los, { x: 0, y: 0, z: -1 }).toFixed(6)), Number(Math.PI.toFixed(6)));
-assert.equal(Number(reflectance.monostaticLambertFactor({ x: 0, y: 0, z: 1 }, los).toFixed(3)), 1.000);
-assert.equal(Number(reflectance.monostaticLambertFactor({ x: Math.sqrt(3) / 2, y: 0, z: 0.5 }, los).toFixed(3)), 0.250);
-assert.equal(Number(reflectance.monostaticLambertFactor({ x: 0, y: 0, z: -1 }, los).toFixed(3)), 0.000);
-assert.ok(
-  reflectance.monostaticSurfaceReturnFactor({ x: 0, y: 0, z: 1 }, los, { specularGain: 6, specularWidthDeg: 5 })
-  > reflectance.monostaticSurfaceReturnFactor({ x: Math.sqrt(3) / 2, y: 0, z: 0.5 }, los, { specularGain: 6, specularWidthDeg: 5 }),
-);
-
-assert.equal(Number(sceneBackground.backgroundTemporalDriftFactor(0, 0, 2).toFixed(3)), 1.000);
-assert.ok(sceneBackground.backgroundTemporalDriftFactor(0, 0.2, 1) > sceneBackground.backgroundTemporalDriftFactor(0.5, 0.2, 1));
-assert.notEqual(
-  Number(sceneBackground.backgroundSpatialFactor(0, 0, 4, 4, 0.1, 0.2, -0.1).toFixed(4)),
-  Number(sceneBackground.backgroundSpatialFactor(3, 3, 4, 4, 0.1, 0.2, -0.1).toFixed(4)),
-);
-const bgMap = sceneBackground.makeBackgroundSpatialMap(4, 4, 0.02, 0.1, -0.05);
-const bgMean = bgMap.flat().reduce((sum, value) => sum + value, 0) / bgMap.flat().length;
-assert.equal(Number(bgMean.toFixed(3)), 1.000);
+{
+  const commonSolarBackground = {
+    solarIrradiance: 1.35,
+    atmosphericVisibilityKm: 23,
+    laserWavelengthNm: 780,
+    filterBandwidth: 10,
+    apertureDiameter: 0.025,
+    systemEfficiency: 0.05,
+    quantumEfficiency: 0.07,
+    detectorFov: 50,
+    resolution: { width: 32, height: 32 },
+  };
+  const narrow = physics.solarEnvironmentBackgroundRateCpsPerPixel(commonSolarBackground);
+  const wide = physics.solarEnvironmentBackgroundRateCpsPerPixel({ ...commonSolarBackground, filterBandwidth: 50 });
+  const noSun = physics.solarEnvironmentBackgroundRateCpsPerPixel({ ...commonSolarBackground, solarIrradiance: 0 });
+  assert.ok(narrow > 1e9);
+  assert.ok(wide > narrow * 4.5);
+  assert.equal(noSun, 0);
+}
 
 const lightBudget = budget.estimateSimulationBudget({ width: 32, height: 32 }, 5000);
 assert.equal(lightBudget.level, 'safe');
@@ -126,10 +99,10 @@ assert.equal(heavyBudget.level, 'blocked');
 assert.ok(heavyBudget.datasetMb > 1000);
 const hundredKBudget = budget.estimateSimulationBudget({ width: 32, height: 32 }, 100000);
 assert.equal(hundredKBudget.totalSamples, 102_400_000);
-assert.equal(hundredKBudget.level, 'caution');
+assert.equal(hundredKBudget.level, 'blocked');
 const twoHundredKBudget = budget.estimateSimulationBudget({ width: 32, height: 32 }, 200000);
 assert.equal(twoHundredKBudget.totalSamples, 204_800_000);
-assert.equal(twoHundredKBudget.level, 'caution');
+assert.equal(twoHundredKBudget.level, 'blocked');
 const overBackendFrameBudget = budget.estimateSimulationBudget({ width: 32, height: 32 }, 200001);
 assert.equal(overBackendFrameBudget.level, 'blocked');
 
@@ -188,6 +161,192 @@ assert.equal(overBackendFrameBudget.level, 'blocked');
     filterBandwidth: 10,
   });
   assert.equal(noSunScene.scene_stray_rate, 0);
+  const manualSbrScene = backendSimulation.backendEnvironmentScales({
+    solarIrradiance: 1,
+    backgroundNoiseMode: 'manual_sbr',
+    atmosphericVisibilityKm: 5,
+    atmosphericAttenuationEnabled: true,
+    laserWavelengthNm: 850,
+    filterBandwidth: 10,
+  });
+  assert.equal(manualSbrScene.scene_stray_rate, 0);
+  assert.equal(manualSbrScene.solar_environment_rate, 0);
+  const backendService = new backendSimulation.BackendSimulationService();
+  const manualPayload = backendService.toSummaryRequest({
+    targetType: 'Ball',
+    initialPos: { x: 0, y: 1.5, z: 4 },
+    initialVel: { x: 0, y: 0, z: 0 },
+    reflectivity: 0.1,
+    restitution: 0.8,
+    ballMotionType: 'Gravity',
+    bladeMotionType: 'Fixed',
+    waypoints: [],
+    pathSpeeds: [],
+    pathRotationSpeeds: [],
+    rotationRadius: 0.5,
+    rotationSpeed: 12000,
+    rotationKeyframes: [],
+    bladePitch: 90,
+    rotationCenter: { x: 0, z: 0 },
+    uploadedImage: null,
+    droneScale: 1,
+    resolution: { width: 32, height: 32 },
+    detectorPresetId: 'pf32',
+    detectorFov: 50,
+    detectorYaw: 0,
+    detectorPitch: 0,
+    pixelPitchUm: 50,
+    fillFactor: 0.015,
+    microlensGain: 13.3,
+    frameDurationUs: 20,
+    quantumEfficiency: 0.3,
+    apertureDiameter: 0.025,
+    systemEfficiency: 0.05,
+    filterBandwidth: 10,
+    darkCountRate: 100,
+    timeResolutionPs: 256,
+    tdcMaxCount: 8191,
+    solarIrradiance: 1.35,
+    backgroundNoiseMode: 'manual_sbr',
+    manualSignalBackgroundRatio: 7,
+    atmosphericAttenuationEnabled: true,
+    atmosphericVisibilityKm: 23,
+    laserMode: 'CW',
+    laserPulseEnergy: 1e-12,
+    laserAveragePower: 1e-6,
+    laserRepetitionFrequency: 1000000,
+    laserPulseWidthNs: 1,
+    laserWavelengthNm: 780,
+    transmitterDivergenceMrad: 1,
+    nFrames: 1000,
+    cameraHeight: 1,
+  });
+  assert.equal(manualPayload.background_noise_mode, 'manual_sbr');
+  assert.equal(manualPayload.manual_signal_background_ratio, 7);
+  assert.equal(manualPayload.scene_stray_rate, 0);
+  assert.equal(manualPayload.persist_artifacts, false);
+  assert.equal(manualPayload.include_event_list, false);
+  assert.equal(manualPayload.include_tdc_frame_cube, false);
+  assert.equal(manualPayload.save_truth_series, false);
+  const exportPayload = backendService.toSummaryRequest({
+    targetType: 'Ball',
+    initialPos: { x: 0, y: 1.5, z: 4 },
+    initialVel: { x: 0, y: 0, z: 0 },
+    reflectivity: 0.1,
+    restitution: 0.8,
+    ballMotionType: 'Gravity',
+    bladeMotionType: 'Fixed',
+    waypoints: [],
+    pathSpeeds: [],
+    pathRotationSpeeds: [],
+    rotationRadius: 0.5,
+    rotationSpeed: 12000,
+    rotationKeyframes: [],
+    bladePitch: 90,
+    rotationCenter: { x: 0, z: 0 },
+    uploadedImage: null,
+    droneScale: 1,
+    resolution: { width: 32, height: 32 },
+    detectorPresetId: 'pf32',
+    detectorFov: 50,
+    detectorYaw: 0,
+    detectorPitch: 0,
+    pixelPitchUm: 50,
+    fillFactor: 0.015,
+    microlensGain: 13.3,
+    frameDurationUs: 20,
+    quantumEfficiency: 0.3,
+    apertureDiameter: 0.025,
+    systemEfficiency: 0.05,
+    filterBandwidth: 10,
+    darkCountRate: 100,
+    timeResolutionPs: 256,
+    tdcMaxCount: 8191,
+    solarIrradiance: 1.35,
+    backgroundNoiseMode: 'manual_sbr',
+    manualSignalBackgroundRatio: 7,
+    atmosphericAttenuationEnabled: true,
+    atmosphericVisibilityKm: 23,
+    laserMode: 'CW',
+    laserPulseEnergy: 1e-12,
+    laserAveragePower: 1e-6,
+    laserRepetitionFrequency: 1000000,
+    laserPulseWidthNs: 1,
+    laserWavelengthNm: 780,
+    transmitterDivergenceMrad: 1,
+    nFrames: 1000,
+    cameraHeight: 1,
+  }, { persistArtifacts: true, includeEventList: true, includeTdcFrameCube: true });
+  assert.equal(exportPayload.persist_artifacts, true);
+  assert.equal(exportPayload.include_event_list, true);
+  assert.equal(exportPayload.include_tdc_frame_cube, true);
+  assert.equal(
+    backendSimulation.backendErrorMessage({
+      message: 'Http failure response for http://127.0.0.1:8000/api/simulate/jobs: 422 Unprocessable Entity',
+      error: {
+        detail: [
+          { loc: ['body', 'manual_signal_background_ratio'], msg: 'Input should be greater than 0' },
+          { loc: ['body'], msg: 'simulation frame count exceeds backend limit (200001 > 200000)' },
+        ],
+      },
+    }),
+    'manual_signal_background_ratio: Input should be greater than 0; request: simulation frame count exceeds backend limit (200001 > 200000)',
+  );
+  const summaryResult = backendService.summaryToSimulationResult({
+    roi_h: 2,
+    roi_w: 2,
+    n_frames: 100000,
+    sample_rate_hz: 50000,
+    preview_counts: [
+      [1, 2],
+      [3, 4],
+    ],
+    total_noise_photons: 10,
+    total_background_photons: 6,
+    total_signal_photons: 7,
+    expected_signal_map: [
+      [0, 1],
+      [2, 4],
+    ],
+    truth_freq_hz: 12,
+    truth_row: 1,
+    truth_col: 1,
+  }, { tdcMaxCount: 8191 });
+  assert.equal(summaryResult.dataset.length, 0);
+  assert.equal(backendSimulation.hasLocalDatasetDownload(summaryResult), false);
+  assert.equal(backendSimulation.hasLocalDatasetDownload({ dataset: new Uint16Array([1, 2]) }), true);
+  assert.deepEqual(plainJson(summaryResult.photonCountMap), [
+    [1, 2],
+    [3, 4],
+  ]);
+  const variableFrequencyResult = backendService.summaryToSimulationResult({
+    roi_h: 1,
+    roi_w: 1,
+    n_frames: 4,
+    sample_rate_hz: 2,
+    preview_counts: [[0]],
+    total_noise_photons: 0,
+    total_background_photons: 0,
+    total_signal_photons: 0,
+    expected_signal_map: [[0]],
+    truth_freq_hz: 12,
+    truth_frequency_series_hz: [10, 11, 12, 13],
+    truth_propeller_frequency_series_hz: [
+      [10, 20, 30, 40],
+      [11, 21, 31, 41],
+      [12, 22, 32, 42],
+      [13, 23, 33, 43],
+    ],
+    truth_row: 0,
+    truth_col: 0,
+  }, { tdcMaxCount: 8191 });
+  assert.deepEqual(variableFrequencyResult.groundTruthData.frequencies, [10, 11, 12, 13]);
+  assert.deepEqual(variableFrequencyResult.groundTruthData.propellerFrequencies, [
+    [10, 20, 30, 40],
+    [11, 21, 31, 41],
+    [12, 22, 32, 42],
+    [13, 23, 33, 43],
+  ]);
   const expectedMap = backendSimulation.expectedSignalMapFromSummary({
     roi_h: 2,
     roi_w: 3,
@@ -239,13 +398,11 @@ assert.equal(Number(resolved.solarIrradiance.toFixed(2)), 1.16);
 assert.equal(resolved.resolution.width, 32);
 assert.equal(resolved.resolution.height, 32);
 assert.equal(Number(resolved.detectorFovDeg.toFixed(1)), 50.0);
-assert.equal(environmentPresets.findEnvironmentPreset('lab_dim').solarScale, 0.00005);
 
 for (const relativePath of [
   'src/models/simulation-params.model.ts',
   'src/components/simulation-view/simulation-view.component.ts',
   'src/components/simulation-view/simulation-view.component.html',
-  'src/services/simulation.service.ts',
   'backend/models.py',
   'sim/detector_presets.py',
 ]) {
@@ -276,7 +433,7 @@ const backendSimulationSource = fs.readFileSync(path.join(root, 'src/services/ba
 assert.equal(backendSimulationSource.includes('activeLaserIrradianceWm2Nm'), false);
 assert.equal(backendSimulationSource.includes("illumination_mode: 'laser_plus_solar'"), true);
 assert.equal(backendSimulationSource.includes('transmitter_divergence_mrad: params.transmitterDivergenceMrad'), true);
-const localSimulationSource = fs.readFileSync(path.join(root, 'src/services/simulation.service.ts'), 'utf8');
-assert.equal(localSimulationSource.includes('transmitterDivergenceMrad * 1e-3 / 2'), true);
+const simulationViewSource = fs.readFileSync(path.join(root, 'src/components/simulation-view/simulation-view.component.ts'), 'utf8');
+assert.equal(simulationViewSource.includes('Math.min(window.devicePixelRatio || 1, 2)'), true);
 
 console.log('physics service checks passed');

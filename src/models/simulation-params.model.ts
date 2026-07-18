@@ -34,6 +34,7 @@ export interface IPhotonEvent {
 export interface IGroundTruthData {
   times: number[];       // Time of each frame in seconds
   frequencies: number[]; // True frequency at each frame in Hz
+  propellerFrequencies?: number[][]; // Per-frame mechanical frequency for drone propellers [frame][propeller]
   phases: number[];      // True phase at each frame in radians
   distances?: number[];  // True distance at each frame in meters (for ToF comparison)
 }
@@ -105,8 +106,9 @@ export interface ISimulationParams {
   tdcMaxCount: number;
 
   // Environment & Laser
-  environmentPresetId?: string;
   solarIrradiance: number;
+  backgroundNoiseMode: 'solar_environment' | 'manual_sbr';
+  manualSignalBackgroundRatio: number;
   atmosphericAttenuationEnabled: boolean;
   atmosphericVisibilityKm: number;
   laserMode: 'Pulsed' | 'CW';

@@ -6,7 +6,7 @@ import numpy as np
 
 
 def make_time_axis(observation_time_s, sample_rate_hz):
-    n_frames = int(round(observation_time_s * sample_rate_hz))
+    n_frames = max(1, int(round(observation_time_s * sample_rate_hz)))
     dt = 1.0 / sample_rate_hz
     t = np.arange(n_frames) * dt
     return t, dt, n_frames

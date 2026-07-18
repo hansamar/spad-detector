@@ -8,8 +8,8 @@ export interface ISimulationBudget {
 }
 
 const MAX_BACKEND_FRAMES = 200_000;
-const MAX_BACKEND_SAMPLES = 204_800_000;
-const CAUTION_SAMPLES = 96_000_000;
+const MAX_BACKEND_SAMPLES = 50_000_000;
+const CAUTION_SAMPLES = 30_000_000;
 
 export function estimateSimulationBudget(
   resolution: { width: number; height: number },

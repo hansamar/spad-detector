@@ -42,26 +42,43 @@ def main() -> None:
     )
     assert too_large.status_code == 422
 
-    hundred_k_params = params_from_request(
+    forty_k_params = params_from_request(
         SimulateRequest(
             detector_preset="pf32",
-            observation_time_s=2.0,
+            observation_time_s=0.8,
             sample_rate_hz=50_000,
             roi_w=32,
             roi_h=32,
         )
     )
-    assert int(round(hundred_k_params.observation_time_s * hundred_k_params.sample_rate_hz)) == 100_000
-    two_hundred_k_params = params_from_request(
-        SimulateRequest(
-            detector_preset="pf32",
-            observation_time_s=4.0,
-            sample_rate_hz=50_000,
-            roi_w=32,
-            roi_h=32,
-        )
+    assert int(round(forty_k_params.observation_time_s * forty_k_params.sample_rate_hz)) == 40_000
+
+    over_sample_budget = client.post(
+        "/api/simulate/summary",
+        json={
+            "detector_preset": "pf32",
+            "observation_time_s": 2.0,
+            "sample_rate_hz": 50_000,
+            "roi_w": 32,
+            "roi_h": 32,
+        },
     )
-    assert int(round(two_hundred_k_params.observation_time_s * two_hundred_k_params.sample_rate_hz)) == 200_000
+    assert over_sample_budget.status_code == 422
+
+    trajectory_points = 40_000
+    trajectory_dt = 1.0 / 50_000
+    forty_k_trajectory = SimulateRequest(
+        detector_preset="pf32",
+        observation_time_s=0.8,
+        sample_rate_hz=50_000,
+        roi_w=32,
+        roi_h=32,
+        target_trajectory_times_s=[index * trajectory_dt for index in range(trajectory_points)],
+        target_trajectory_x_m=[0.0] * trajectory_points,
+        target_trajectory_y_m=[3.0] * trajectory_points,
+        target_trajectory_z_m=[6.0] * trajectory_points,
+    )
+    assert len(forty_k_trajectory.target_trajectory_times_s or []) == trajectory_points
 
     bad_trajectory = client.post(
         "/api/simulate/summary",
@@ -198,6 +215,19 @@ def main() -> None:
             "solar_irradiance": 0.8,
             "scene_stray_rate": 2,
             "save_truth_series": True,
+            "target_trajectory_times_s": [0.0, 0.1, 0.2],
+            "target_trajectory_x_m": [0.0, 0.0, 0.0],
+            "target_trajectory_y_m": [1.0, 1.0, 1.0],
+            "target_trajectory_z_m": [1.5, 1.5, 1.5],
+            "target_trajectory_propeller_rpm1": [18000, 20000, 18000],
+            "target_trajectory_propeller_rpm2": [18000, 20000, 18000],
+            "target_trajectory_propeller_rpm3": [18000, 20000, 18000],
+            "target_trajectory_propeller_rpm4": [18000, 20000, 18000],
+            "detector_position_x_m": 0,
+            "detector_position_y_m": 1,
+            "detector_position_z_m": 0,
+            "detector_yaw_deg": 0,
+            "detector_pitch_deg": 0,
         },
     )
     assert job.status_code == 200
@@ -213,7 +243,23 @@ def main() -> None:
         time.sleep(0.1)
     assert status_payload is not None
     assert status_payload["status"] == "completed"
-    assert status_payload["summary"]["n_frames"] == 4
+    assert status_payload["summary"]["n_frames"] == 5
+    assert np.allclose(
+        status_payload["summary"]["truth_frequency_series_hz"],
+        [300.0, 316.6666667, 333.3333333, 316.6666667, 300.0],
+        atol=1e-3,
+    )
+    assert np.allclose(
+        status_payload["summary"]["truth_propeller_frequency_series_hz"],
+        [
+            [300.0, 300.0, 300.0, 300.0],
+            [316.6666667, 316.6666667, 316.6666667, 316.6666667],
+            [333.3333333, 333.3333333, 333.3333333, 333.3333333],
+            [316.6666667, 316.6666667, 316.6666667, 316.6666667],
+            [300.0, 300.0, 300.0, 300.0],
+        ],
+        atol=1e-3,
+    )
     assert sum(sum(row) for row in status_payload["summary"]["expected_signal_map"]) > 0
     assert status_payload["summary"]["total_noise_photons"] >= status_payload["summary"]["total_background_photons"]
     assert status_payload["result"] is None
@@ -224,6 +270,79 @@ def main() -> None:
     assert download.headers["content-type"] == "application/octet-stream"
     assert download.headers.get("content-disposition", "").endswith('.bin"')
     assert len(download.content) == status_payload["summary"]["n_frames"] * status_payload["summary"]["roi_h"] * status_payload["summary"]["roi_w"] * 2
+    metadata = client.get(f"/api/simulate/jobs/{job_id}/metadata")
+    assert metadata.status_code == 200
+    assert "truth_frequency_series_hz" not in metadata.json()
+
+    tdc_fallback_job = client.post(
+        "/api/simulate/jobs",
+        json={
+            "detector_preset": "pf32",
+            "observation_time_s": 0.02,
+            "sample_rate_hz": 50,
+            "roi_w": 4,
+            "roi_h": 4,
+            "persist_artifacts": True,
+            "include_event_list": True,
+            "include_tdc_frame_cube": True,
+            "max_event_count": 0,
+            "dark_count_rate": 100000,
+            "scene_stray_rate": 0,
+        },
+    )
+    assert tdc_fallback_job.status_code == 200
+    tdc_fallback_job_id = tdc_fallback_job.json()["job_id"]
+    tdc_fallback_status_payload = None
+    for _ in range(40):
+        tdc_fallback_status = client.get(f"/api/simulate/jobs/{tdc_fallback_job_id}")
+        assert tdc_fallback_status.status_code == 200
+        tdc_fallback_status_payload = tdc_fallback_status.json()
+        if tdc_fallback_status_payload["status"] == "completed":
+            break
+        assert tdc_fallback_status_payload["status"] in {"queued", "running"}
+        time.sleep(0.1)
+    assert tdc_fallback_status_payload is not None
+    assert tdc_fallback_status_payload["status"] == "completed"
+    assert tdc_fallback_status_payload["summary"]["observed_total_counts"] > 0
+    tdc_download = client.get(f"/api/simulate/jobs/{tdc_fallback_job_id}/download?format=tdc_frame_cube")
+    assert tdc_download.status_code == 200
+    assert len(tdc_download.content) == (
+        tdc_fallback_status_payload["summary"]["n_frames"]
+        * tdc_fallback_status_payload["summary"]["roi_h"]
+        * tdc_fallback_status_payload["summary"]["roi_w"]
+        * 2
+    )
+
+    fast_job = client.post(
+        "/api/simulate/jobs",
+        json={
+            "detector_preset": "pf32",
+            "observation_time_s": 0.04,
+            "sample_rate_hz": 50,
+            "roi_w": 8,
+            "roi_h": 8,
+            "persist_artifacts": False,
+            "include_event_list": True,
+            "include_tdc_frame_cube": True,
+            "background_noise_mode": "manual_sbr",
+            "manual_signal_background_ratio": 5,
+        },
+    )
+    assert fast_job.status_code == 200
+    fast_job_id = fast_job.json()["job_id"]
+    fast_status_payload = None
+    for _ in range(40):
+        fast_status = client.get(f"/api/simulate/jobs/{fast_job_id}")
+        assert fast_status.status_code == 200
+        fast_status_payload = fast_status.json()
+        if fast_status_payload["status"] == "completed":
+            break
+        assert fast_status_payload["status"] in {"queued", "running"}
+        time.sleep(0.1)
+    assert fast_status_payload is not None
+    assert fast_status_payload["status"] == "completed"
+    assert fast_status_payload["summary"] is not None
+    assert fast_status_payload["download_url"] is None
 
     print("backend capabilities checks passed")
 

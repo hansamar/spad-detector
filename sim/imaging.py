@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.ndimage import convolve1d
 
 
 def psf_weights_gaussian(roi_h, roi_w, cx, cy, sigma_x, sigma_y=None):
@@ -213,14 +214,10 @@ def _apply_separable_blur(cube, sigma_x, sigma_y):
     out = np.asarray(cube, dtype=np.float64).copy()
     if sigma_x > 1e-8:
         kernel_x = _gaussian_kernel_1d(sigma_x)
-        pad_x = len(kernel_x) // 2
-        padded = np.pad(out, ((0, 0), (0, 0), (pad_x, pad_x)), mode="edge")
-        out = np.apply_along_axis(lambda row: np.convolve(row, kernel_x, mode="valid"), 2, padded)
+        out = convolve1d(out, kernel_x, axis=2, mode="nearest")
     if sigma_y > 1e-8:
         kernel_y = _gaussian_kernel_1d(sigma_y)
-        pad_y = len(kernel_y) // 2
-        padded = np.pad(out, ((0, 0), (pad_y, pad_y), (0, 0)), mode="edge")
-        out = np.apply_along_axis(lambda col: np.convolve(col, kernel_y, mode="valid"), 1, padded)
+        out = convolve1d(out, kernel_y, axis=1, mode="nearest")
     return out
 
 

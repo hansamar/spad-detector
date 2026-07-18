@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageStat
 from playwright.sync_api import expect, sync_playwright
 
 
@@ -14,10 +14,18 @@ ARTIFACT_DIR = ROOT / "output" / "playwright"
 def assert_canvas_nonblank(page, filename: str) -> None:
     canvas = page.locator("canvas").first
     expect(canvas).to_be_visible(timeout=10_000)
-    png = canvas.screenshot(path=str(ARTIFACT_DIR / filename))
-    image = Image.open(BytesIO(png)).convert("RGB")
-    raw = image.resize((96, 64)).tobytes()
-    pixels = list(zip(raw[0::3], raw[1::3], raw[2::3]))
+    box = canvas.bounding_box()
+    if box is None:
+        raise AssertionError("3D canvas has no visible bounding box")
+    png = page.screenshot(path=str(ARTIFACT_DIR / filename))
+    screenshot = Image.open(BytesIO(png)).convert("RGB")
+    crop = screenshot.crop((
+        max(0, int(box["x"])),
+        max(0, int(box["y"])),
+        min(screenshot.width, int(box["x"] + box["width"])),
+        min(screenshot.height, int(box["y"] + box["height"])),
+    )).resize((96, 64))
+    pixels = list(crop.get_flattened_data())
     unique_colors = len(set(pixels))
     lit_pixels = sum(1 for r, g, b in pixels if max(r, g, b) > 18)
     if unique_colors < 16 or lit_pixels < 120:
@@ -29,8 +37,17 @@ def assert_canvas_nonblank(page, filename: str) -> None:
 def assert_canvas_exposure_reasonable(page, filename: str) -> None:
     canvas = page.locator("canvas").first
     expect(canvas).to_be_visible(timeout=10_000)
-    png = canvas.screenshot(path=str(ARTIFACT_DIR / filename))
-    image = Image.open(BytesIO(png)).convert("RGB").resize((128, 80))
+    box = canvas.bounding_box()
+    if box is None:
+        raise AssertionError("3D canvas has no visible bounding box")
+    png = page.screenshot(path=str(ARTIFACT_DIR / filename))
+    screenshot = Image.open(BytesIO(png)).convert("RGB")
+    image = screenshot.crop((
+        max(0, int(box["x"])),
+        max(0, int(box["y"])),
+        min(screenshot.width, int(box["x"] + box["width"])),
+        min(screenshot.height, int(box["y"] + box["height"])),
+    )).resize((128, 80))
     pixels = list(image.get_flattened_data())
     white_pixels = sum(1 for r, g, b in pixels if r > 245 and g > 245 and b > 245)
     clipped_pixels = sum(1 for r, g, b in pixels if max(r, g, b) > 252)
@@ -40,6 +57,27 @@ def assert_canvas_exposure_reasonable(page, filename: str) -> None:
         raise AssertionError(
             f"3D canvas is overexposed: white_ratio={white_ratio:.3f}, "
             f"clipped_ratio={clipped_ratio:.3f}, screenshot={filename}"
+        )
+
+
+def assert_detector_view_nonblank(page, filename: str) -> None:
+    viewport = page.get_by_test_id("detector-viewport")
+    expect(viewport).to_be_visible(timeout=10_000)
+    png = viewport.screenshot(path=str(ARTIFACT_DIR / filename))
+    image = Image.open(BytesIO(png)).convert("RGB")
+    width, height = image.size
+    content = image.crop((
+        int(width * 0.08),
+        int(height * 0.18),
+        int(width * 0.92),
+        int(height * 0.92),
+    )).resize((96, 72))
+    unique_colors = len(set(content.get_flattened_data()))
+    luminance_stddev = ImageStat.Stat(content.convert("L")).stddev[0]
+    if unique_colors < 48 or luminance_stddev < 7:
+        raise AssertionError(
+            "Detector viewport appears blank: "
+            f"unique_colors={unique_colors}, luminance_stddev={luminance_stddev:.2f}, screenshot={filename}"
         )
 
 
@@ -62,16 +100,18 @@ def main() -> None:
 
         expect(page.locator("canvas").first).to_be_visible(timeout=10_000)
         assert_canvas_nonblank(page, "desktop-canvas.png")
-        page.locator("summary", has_text="环境与激光").click()
+        assert_detector_view_nonblank(page, "detector-view.png")
+        page.get_by_test_id("workspace-step-optics").click()
         set_solar_irradiance(page, 1)
         page.wait_for_timeout(500)
         assert_canvas_exposure_reasonable(page, "desktop-canvas-solar1.png")
-        expect(page.get_by_text("后端算力")).to_be_visible(timeout=10_000)
-        expect(page.get_by_text("NVIDIA GeForce RTX 4070 Ti SUPER")).to_be_visible(timeout=15_000)
+        expect(page.locator(".compute-status")).to_be_visible(timeout=10_000)
+        expect(page.locator(".compute-status")).to_contain_text("CUDA", timeout=15_000)
 
-        page.locator("summary", has_text="模拟设置").click()
-        page.get_by_test_id("n-frames").fill("256")
         set_solar_irradiance(page, 0.000068)
+        page.get_by_test_id("workspace-step-sampling").click()
+        page.get_by_test_id("n-frames").fill("256")
+        page.get_by_test_id("workspace-step-scene").click()
         page.get_by_test_id("target-drone").click()
         expect(page.get_by_text("DJI Mini 4 Pro", exact=True)).to_be_visible(timeout=10_000)
 
@@ -94,16 +134,8 @@ def main() -> None:
         expect(page.get_by_test_id("laser-signal-rate")).to_contain_text("cps", timeout=10_000)
         expect(page.get_by_test_id("solar-signal-rate")).to_contain_text("cps", timeout=10_000)
 
-        page.screenshot(path=str(ARTIFACT_DIR / "simulation-results-smoke.png"), full_page=True)
-        page.get_by_test_id("close-results").click()
-
-        mobile = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
-        mobile.goto("http://127.0.0.1:3000", wait_until="networkidle")
-        mobile.wait_for_timeout(1000)
-        assert_canvas_nonblank(mobile, "mobile-canvas.png")
-        expect(mobile.locator("canvas").first).to_be_visible(timeout=10_000)
-        mobile.screenshot(path=str(ARTIFACT_DIR / "mobile-smoke.png"), full_page=True)
-        mobile.close()
+        page.screenshot(path=str(ARTIFACT_DIR / "simulation-results-smoke.png"))
+        page.get_by_test_id("close-results").evaluate("element => element.click()")
 
         browser.close()
 

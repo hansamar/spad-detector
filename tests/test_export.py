@@ -58,6 +58,7 @@ def test_build_metadata_count_cube() -> None:
         random_seed=42,
     )
     assert meta["format"] == "count_cube"
+    assert meta["schema"] == {"name": "spad-dataset", "version": "1.0.0"}
     assert meta["shape"] == [100, 32, 32]
     assert meta["dtype"] == "uint16"
     assert meta["layout"] == "frame-major"
@@ -132,6 +133,11 @@ def test_count_cube_readback_shape() -> None:
         assert base.with_suffix(".bin").exists()
         assert base.with_suffix(".metadata.json").exists()
 
+        written_meta = json.loads(base.with_suffix(".metadata.json").read_text(encoding="utf-8"))
+        assert written_meta["artifact"]["path"] == "counts.bin"
+        assert written_meta["artifact"]["bytes"] == counts.nbytes
+        assert len(written_meta["artifact"]["sha256"]) == 64
+
         # 读回
         loaded = np.fromfile(str(base.with_suffix(".bin")), dtype=np.uint16)
         cube = loaded.reshape(meta["shape"])
@@ -169,7 +175,22 @@ def test_tdc_cube_sentinel() -> None:
         loaded = np.fromfile(str(base.with_suffix(".bin")), dtype=np.uint16).reshape(2, 4, 4)
         assert int(loaded[0, 1, 2]) == 100
         assert int(loaded[1, 3, 0]) == 500
-        assert np.sum(loaded == empty_val) == 30  # 32 pixels total, 2 are non-empty
+    assert np.sum(loaded == empty_val) == 30  # 32 pixels total, 2 are non-empty
+
+
+def test_uint16_tdc_uses_zero_as_safe_empty_sentinel() -> None:
+    tdc = generate_tdc_frame_cube_from_event_list(
+        event_frame_index=np.array([], dtype=np.int32),
+        event_row=np.array([], dtype=np.uint16),
+        event_col=np.array([], dtype=np.uint16),
+        event_tof_bins=np.array([], dtype=np.uint16),
+        n_frames=1,
+        roi_h=2,
+        roi_w=2,
+        empty_pixel_value=0,
+    )
+    assert tdc.dtype == np.uint16
+    assert np.all(tdc == 0)
 
 
 def test_event_list_field_lengths() -> None:
@@ -356,6 +377,12 @@ def test_bundle_zip_contents() -> None:
             assert "counts.bin" in names
             assert "metadata.json" in names
             assert "summary.json" in names
+            assert "manifest.json" in names
+            manifest = json.loads(zf.read("manifest.json"))
+            assert manifest["schema"] == {"name": "spad-dataset", "version": "1.0.0"}
+            assert manifest["artifacts"][0]["path"] == "counts.bin"
+            assert manifest["artifacts"][0]["bytes"] == counts.nbytes
+            assert len(manifest["artifacts"][0]["sha256"]) == 64
 
 
 def test_export_format_enum() -> None:

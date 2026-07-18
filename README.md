@@ -210,7 +210,7 @@ The backend rejects requests that exceed its guarded compute envelope:
 | --- | ---: |
 | Frames per run | `200,000` |
 | ROI pixels | `16,384` |
-| Total frame-pixel samples | `204,800,000` |
+| Total frame-pixel samples | `50,000,000` |
 | Recorded trajectory points | `50,000` |
 | Custom-shape samples | `512` |
 
@@ -219,7 +219,7 @@ The frontend budget estimator uses the same frame and sample limits so oversized
 ## Repository Layout
 
 ```text
-src/        Angular UI, Three.js scene, frontend simulation services
+src/        Angular UI, Three.js scene, backend client, and result analysis
 backend/    FastAPI routes, job management, capability reporting, serializers
 sim/        Python optical, detector, geometry, background, and sampling core
 desktop/    Electron shell and CUDA-capable Python selection

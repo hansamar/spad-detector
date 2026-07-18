@@ -261,6 +261,8 @@ def params_from_request(req: SimulateRequest) -> SimParams:
     _apply_if_set(req, "glint_gain", lambda v: setattr(params.target, "glint_gain", v))
 
     _apply_if_set(req, "scene_stray_rate", lambda v: setattr(params.background, "scene_stray_rate_cps_per_pixel", v))
+    _apply_if_set(req, "background_noise_mode", lambda v: setattr(params.background, "background_noise_mode", v))
+    _apply_if_set(req, "manual_signal_background_ratio", lambda v: setattr(params.background, "manual_signal_background_ratio", v))
 
     _apply_if_set(req, "illumination_mode", lambda v: setattr(params.illumination, "mode", v))
     _apply_if_set(req, "laser_mode", lambda v: setattr(params.illumination, "laser_mode", v))
@@ -299,6 +301,19 @@ def params_from_request(req: SimulateRequest) -> SimParams:
     _apply_if_set(req, "jitter_sigma_pixels", lambda v: setattr(params.image, "jitter_sigma_pixels", v))
     _apply_scene_geometry(req, params)
     _apply_recorded_trajectory(req, params)
+
+    n_frames = max(1, int(round(float(params.observation_time_s) * float(params.sample_rate_hz))))
+    roi_pixels = int(params.image.roi_w) * int(params.image.roi_h)
+    from backend.models import MAX_BACKEND_FRAMES, MAX_BACKEND_ROI_PIXELS, MAX_BACKEND_SAMPLES
+    if n_frames > MAX_BACKEND_FRAMES:
+        raise ValueError(f"simulation frame count exceeds backend limit after trajectory conversion ({n_frames} > {MAX_BACKEND_FRAMES})")
+    if roi_pixels > MAX_BACKEND_ROI_PIXELS:
+        raise ValueError(f"ROI pixel count exceeds backend limit after conversion ({roi_pixels} > {MAX_BACKEND_ROI_PIXELS})")
+    if n_frames * roi_pixels > MAX_BACKEND_SAMPLES:
+        raise ValueError(
+            f"simulation sample budget exceeds backend limit after trajectory conversion "
+            f"({n_frames * roi_pixels} > {MAX_BACKEND_SAMPLES})"
+        )
 
     if params.image.center_x < 0 or params.image.center_x >= params.image.roi_w:
         params.image.center_x = (params.image.roi_w - 1) / 2.0
@@ -353,6 +368,12 @@ def result_to_response(
         },
         snr_db=result["snr_db"],
         truth_freq_hz=result["truth_freq_hz"],
+        truth_frequency_series_encoded=encode_array(result["truth_frequency_series_hz"])
+        if result.get("truth_frequency_series_hz") is not None
+        else None,
+        truth_propeller_frequency_series_encoded=encode_array(result["truth_propeller_frequency_series_hz"])
+        if result.get("truth_propeller_frequency_series_hz") is not None
+        else None,
         truth_pixel=result["truth_pixel"],
         truth_row=result["truth_row"],
         truth_col=result["truth_col"],
@@ -404,14 +425,29 @@ def result_to_summary_response(
 ) -> SimulateSummaryResponse:
     """Convert simulator result into a lightweight frontend summary."""
 
-    counts = np.asarray(result["counts"])
-    preview = np.sum(counts, axis=0).astype(np.int64)
+    if result.get("preview_counts") is not None:
+        preview = np.asarray(result["preview_counts"], dtype=np.int64)
+        counts = np.empty((0,), dtype=np.uint16)
+    else:
+        counts = np.asarray(result["counts"])
+        preview = np.sum(counts, axis=0).astype(np.int64)
     expected_signal_map = np.asarray(result.get("expected_signal_map"), dtype=np.float64)
     if expected_signal_map.shape != preview.shape:
         expected_signal_map = np.zeros_like(preview, dtype=np.float64)
     sample_backend = result.get("sample_backend")
     capabilities = detect_compute_capabilities()
     actual_backend = sample_backend if sample_backend in {"cpu", "cuda"} else capabilities["recommended_backend"]
+    max_summary_series_points = 2_000
+
+    def decimate_series(values):
+        if values is None:
+            return None
+        array = np.asarray(values, dtype=np.float32)
+        if array.shape[0] <= max_summary_series_points:
+            return array.tolist()
+        indices = np.linspace(0, array.shape[0] - 1, max_summary_series_points, dtype=np.int64)
+        return array[indices].tolist()
+
     return SimulateSummaryResponse(
         scenario_id=result.get("scenario_id"),
         scenario_name=scenario_info["name"] if scenario_info else None,
@@ -444,6 +480,8 @@ def result_to_summary_response(
         target_laser_detected_rate_cps=result["target_laser_detected_rate_cps"],
         target_solar_detected_rate_cps=result["target_solar_detected_rate_cps"],
         truth_freq_hz=result["truth_freq_hz"],
+        truth_frequency_series_hz=decimate_series(result.get("truth_frequency_series_hz")),
+        truth_propeller_frequency_series_hz=decimate_series(result.get("truth_propeller_frequency_series_hz")),
         truth_row=result["truth_row"],
         truth_col=result["truth_col"],
         preview_counts=preview.tolist(),

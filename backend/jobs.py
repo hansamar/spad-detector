@@ -16,6 +16,7 @@ from backend.exporters import (
     ExportFormat,
     build_metadata,
     generate_synthetic_event_list,
+    generate_tdc_frame_cube_from_counts,
     generate_tdc_frame_cube_from_event_list,
     write_count_cube_bin,
     write_tdc_frame_cube_bin,
@@ -45,6 +46,9 @@ def _now() -> float:
 
 
 def _response_from_record(record: dict) -> SimulateJobStatusResponse:
+    download_url = None
+    if record["status"] == "completed" and record.get("artifacts_ready", False):
+        download_url = f"/api/simulate/jobs/{record['job_id']}/download"
     return SimulateJobStatusResponse(
         job_id=record["job_id"],
         status=record["status"],
@@ -53,7 +57,7 @@ def _response_from_record(record: dict) -> SimulateJobStatusResponse:
         summary=record.get("summary"),
         result=record.get("result"),
         error=record.get("error"),
-        download_url=f"/api/simulate/jobs/{record['job_id']}/download" if record["status"] == "completed" else None,
+        download_url=download_url,
     )
 
 
@@ -69,6 +73,7 @@ def create_simulation_job(req: SimulateRequest) -> SimulateJobStatusResponse:
         "result": None,
         "error": None,
         "artifacts_dir": str(ARTIFACT_DIR / f"{job_id}_artifacts"),
+        "artifacts_ready": False,
     }
     with _lock:
         _jobs[job_id] = record
@@ -137,8 +142,15 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
     _set_status(job_id, status="running")
     try:
         params = params_from_request(req)
+        persist_artifacts = bool(req.persist_artifacts) if req.persist_artifacts is not None else True
+        params.summary_only = not persist_artifacts
+        if persist_artifacts:
+            params.save_truth_series = True
         result = simulate_active_spad(params)
         summary = result_to_summary_response(result, None)
+        if not persist_artifacts:
+            _set_status(job_id, status="completed", summary=summary, result=None, error=None, artifacts_ready=False)
+            return
 
         with _lock:
             record = _jobs[job_id]
@@ -163,7 +175,7 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
             qe = float(detector_summary.get("quantum_efficiency", 0.0))
             tdc_bin_ns = float(detector_summary.get("tdc_bin_width_ns", 0.0))
             tdc_max = int(detector_summary.get("max_count_per_frame", 0))
-            timing_jitter_ns = float(detector_summary.get("irf_fwhm_ps", 0.0)) / 1e3
+            timing_jitter_ns = float(params.spad.timing_jitter_ns)
             dead_time_ns = float(params.spad.dead_time_ns)
             seed = int(result.get("seed", 0))
             preset = str(result.get("detector_preset", ""))
@@ -208,14 +220,16 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
             event_dict = None
             event_metadata = None
             max_events = req.max_event_count if req.max_event_count is not None else 10_000_000
+            event_list_limit_warning = None
 
             if want_events:
                 total_observed = int(np.sum(counts))
                 if total_observed > max_events:
                     # 超限：跳过事件生成，写入 warning
-                    count_metadata["warnings"].append(
+                    event_list_limit_warning = (
                         f"event_list skipped: {total_observed} events exceeds max_event_count ({max_events})"
                     )
+                    count_metadata["warnings"].append(event_list_limit_warning)
                 else:
                     rng = np.random.default_rng(seed + 1)
                     event_dict = generate_synthetic_event_list(
@@ -283,19 +297,42 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
             tdc_cube = None
             tdc_metadata = None
 
-            if want_tdc and event_dict is not None:
-                empty_val = tdc_max + 2
-                tdc_cube = generate_tdc_frame_cube_from_event_list(
-                    event_frame_index=event_dict["event_frame_index"],
-                    event_row=event_dict["event_row"],
-                    event_col=event_dict["event_col"],
-                    event_tof_bins=event_dict["event_tof_bins"],
-                    n_frames=n_frames,
-                    roi_h=roi_h,
-                    roi_w=roi_w,
-                    empty_pixel_value=empty_val,
-                    collision_policy="first_event",
-                )
+            if want_tdc:
+                empty_val = 0
+                tdc_warnings = list(result.get("warnings", []))
+                if event_dict is not None:
+                    tdc_cube = generate_tdc_frame_cube_from_event_list(
+                        event_frame_index=event_dict["event_frame_index"],
+                        event_row=event_dict["event_row"],
+                        event_col=event_dict["event_col"],
+                        event_tof_bins=event_dict["event_tof_bins"],
+                        n_frames=n_frames,
+                        roi_h=roi_h,
+                        roi_w=roi_w,
+                        empty_pixel_value=empty_val,
+                        collision_policy="first_event",
+                    )
+                    event_generation = "derived_from_event_list"
+                else:
+                    tdc_cube = generate_tdc_frame_cube_from_counts(
+                        counts=counts,
+                        tdc_bin_width_ns=tdc_bin_ns,
+                        tdc_max_count=tdc_max,
+                        timing_jitter_ns=timing_jitter_ns,
+                        signal_cube=signal_cube,
+                        bg_expected_cube=bg_cube,
+                        dark_expected_cube=dark_cube,
+                        truth_range_series=result.get("truth_range_series"),
+                        fallback_range_m=float(params.target.target_range_m),
+                        rng=np.random.default_rng(seed + 2),
+                        empty_pixel_value=empty_val,
+                    )
+                    event_generation = "direct_from_frame_counts"
+                    tdc_warnings.append(
+                        "tdc_frame_cube generated directly from frame counts because event_list was not materialized"
+                    )
+                    if event_list_limit_warning is not None:
+                        tdc_warnings.append(event_list_limit_warning)
 
                 tdc_metadata = build_metadata(
                     format=ExportFormat.tdc_frame_cube,
@@ -315,7 +352,8 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                     collision_policy="first_event",
                     random_seed=seed,
                     simulation_mode=str(result.get("output_mode", "frame")),
-                    warnings=list(result.get("warnings", [])),
+                    event_generation=event_generation,
+                    warnings=tdc_warnings,
                 )
 
                 write_tdc_frame_cube_bin(
@@ -348,6 +386,6 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
         except OSError as exc:
             _set_status(job_id, status="failed", error=f"写入产物文件失败: {exc}")
             return
-        _set_status(job_id, status="completed", summary=summary, result=None, error=None)
+        _set_status(job_id, status="completed", summary=summary, result=None, error=None, artifacts_ready=True)
     except Exception as exc:
         _set_status(job_id, status="failed", error=str(exc))

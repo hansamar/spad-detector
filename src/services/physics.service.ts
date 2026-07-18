@@ -2,6 +2,11 @@ import { Injectable } from '@angular/core';
 import { ISimulationParams } from '../models/simulation-params.model';
 import { am0SolarIrradianceWM2Nm, relativeChannelResponse, spectralBackgroundScale } from './spectral-response.service';
 
+const SOLAR_ENVIRONMENT_AMBIENT_REFLECTANCE = 0.18;
+const SOLAR_ENVIRONMENT_STRAY_REJECTION = 1;
+const PLANCK_J_S = 6.62607015e-34;
+const LIGHT_SPEED_M_S = 299792458;
+
 export function atmosphericAttenuationCoefficientKm(wavelengthNm: number, visibilityKm = 23): number {
   const safeVisibilityKm = Math.max(0.5, visibilityKm);
   const safeWavelengthNm = Math.max(350, Math.min(1800, wavelengthNm));
@@ -22,17 +27,51 @@ export function hazeScatterScaleFromVisibility(visibilityKm = 23): number {
   return 1 + Math.min(3, Math.max(0, 23 / safeVisibilityKm - 1)) * 0.22;
 }
 
+export function photonEnergyJoule(wavelengthNm: number): number {
+  return (PLANCK_J_S * LIGHT_SPEED_M_S) / (Math.max(wavelengthNm, 1e-9) * 1e-9);
+}
+
+export function solarEnvironmentBackgroundRateCpsPerPixel(params: Pick<ISimulationParams,
+  'solarIrradiance'
+  | 'filterBandwidth'
+  | 'apertureDiameter'
+  | 'systemEfficiency'
+  | 'quantumEfficiency'
+  | 'laserWavelengthNm'
+  | 'detectorFov'
+  | 'resolution'
+  | 'atmosphericVisibilityKm'
+>): number {
+  const irradiance = Math.max(0, params.solarIrradiance);
+  const bandwidth = Math.max(0, params.filterBandwidth ?? 10);
+  if (irradiance === 0 || bandwidth === 0) return 0;
+
+  const apertureArea = Math.PI * (Math.max(params.apertureDiameter ?? 0.025, 0) / 2) ** 2;
+  const resolution = params.resolution ?? { width: 32, height: 32 };
+  const pixelAxis = Math.max(1, resolution.width, resolution.height);
+  const pixelIfovRad = (Math.max(params.detectorFov ?? 50, 1e-9) * Math.PI / 180) / pixelAxis;
+  const pixelSolidAngleSr = pixelIfovRad ** 2;
+  const radiance = SOLAR_ENVIRONMENT_AMBIENT_REFLECTANCE * irradiance / Math.PI;
+  const opticalPower = radiance
+    * bandwidth
+    * apertureArea
+    * pixelSolidAngleSr
+    * hazeScatterScaleFromVisibility(params.atmosphericVisibilityKm)
+    / SOLAR_ENVIRONMENT_STRAY_REJECTION;
+  return Math.max(
+    0,
+    (opticalPower / photonEnergyJoule(params.laserWavelengthNm ?? 780))
+      * Math.max(0, params.systemEfficiency ?? 0.05)
+      * Math.max(0, params.quantumEfficiency ?? 0.07),
+  );
+}
+
 @Injectable({
   providedIn: 'root',
 })
 export class PhysicsService {
-  // --- Physics Constants ---
-  private readonly h = 6.626e-34; // Planck's constant
-  private readonly c = 3e8; // Speed of light
-
   public getPhotonEnergy(wavelengthNm: number): number {
-    const wavelengthM = wavelengthNm * 1e-9;
-    return (this.h * this.c) / wavelengthM;
+    return photonEnergyJoule(wavelengthNm);
   }
 
   private getAtmosphericAttenuationCoefficient(wavelengthNm: number, visibilityKm = 23): number {
@@ -59,7 +98,15 @@ export class PhysicsService {
   }
 
   public calculateBackgroundRatesPerPixel(params: ISimulationParams): { backgroundRateCps: number; darkRateCps: number } {
+    if (params.backgroundNoiseMode === 'manual_sbr') {
+      return {
+        backgroundRateCps: 0,
+        darkRateCps: params.darkCountRate,
+      };
+    }
+
     const hazeScatterScale = hazeScatterScaleFromVisibility(params.atmosphericVisibilityKm);
+    const solarEnvironmentRateCps = solarEnvironmentBackgroundRateCpsPerPixel(params);
 
     if (params.detectorPreset) {
       const channelScale = relativeChannelResponse(params.laserWavelengthNm, params.filterBandwidth, 550, params.detectorPreset.filterBandwidthNm);
@@ -68,18 +115,13 @@ export class PhysicsService {
         * spectralBackgroundScale('scene_stray', params.laserWavelengthNm, params.filterBandwidth);
       const solarScale = Math.max(0, Math.min(8, params.solarIrradiance / Math.max(1e-6, am0SolarIrradianceWM2Nm(params.laserWavelengthNm))));
       return {
-        backgroundRateCps: backgroundRateCps * channelScale * solarScale * hazeScatterScale,
+        backgroundRateCps: backgroundRateCps * channelScale * solarScale * hazeScatterScale + solarEnvironmentRateCps,
         darkRateCps: params.darkCountRate,
       };
     }
 
-    const { solarIrradiance, filterBandwidth, apertureDiameter, systemEfficiency, quantumEfficiency, laserWavelengthNm, resolution } = params;
-    const A_rx = Math.PI * (apertureDiameter / 2) ** 2;
-    const P_bg_optical = (solarIrradiance * filterBandwidth) * A_rx * 1e-4 * hazeScatterScale;
-    const bgPhotonRate = (P_bg_optical / this.getPhotonEnergy(laserWavelengthNm)) * systemEfficiency * quantumEfficiency;
-    const totalPixels = resolution.width * resolution.height;
     return {
-      backgroundRateCps: bgPhotonRate / Math.max(totalPixels, 1),
+      backgroundRateCps: solarEnvironmentRateCps,
       darkRateCps: params.darkCountRate,
     };
   }

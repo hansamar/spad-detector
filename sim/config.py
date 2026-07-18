@@ -10,7 +10,7 @@ class OpticalParams:
     quantum_efficiency: float = 0.07
     filter_bandwidth_nm: float = 10.0
     detector_fov_urad: float = 50.0 * 3.141592653589793 / 180.0 * 1e6
-    stray_light_rejection_ratio: float = 1e6
+    stray_light_rejection_ratio: float = 1.0
     detector_off_axis_urad_x: float = 0.0
     detector_off_axis_urad_y: float = 0.0
     atmospheric_attenuation_enabled: bool = True
@@ -39,6 +39,8 @@ class SpadParams:
 @dataclass
 class BackgroundParams:
     scene_stray_rate_cps_per_pixel: float = 4.0
+    background_noise_mode: str = "solar_environment"
+    manual_signal_background_ratio: float = 10.0
     temporal_drift_depth: float = 0.05
     temporal_drift_hz: float = 0.03
     spatial_nonuniformity_sigma: float = 0.0
@@ -66,7 +68,7 @@ class TargetParams:
     propeller_diameter_m: float = 0.10
     target_reflectivity: float = 0.1
     propeller_reflectivity: float = 0.3
-    solar_irradiance_w_m2_nm: float = 0.000068
+    solar_irradiance_w_m2_nm: float = 1.35
     phase_function_scale: float = 1.0
     phase_function_model: str = "lambert"
     specular_fraction: float = 0.0
@@ -184,6 +186,7 @@ class SimParams:
     simulation_tier: str = "physics_informed"
     simulation_mode: str = "frame"
     lightcurve_mode: str = "attitude_driven"
+    summary_only: bool = False
     save_event_list: bool = False
     save_truth_series: bool = False
     save_intermediate_series: bool = False

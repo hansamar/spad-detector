@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
 
 import numpy as np
 
@@ -40,6 +41,7 @@ from sim.physics import (
     laser_target_detected_rate_cps,
     make_visibility_mask,
     modulation_series,
+    solar_environment_detected_rate_cps_per_pixel,
     target_detected_rate_cps,
 )
 from sim.reflectance import target_lightcurve_attitude_driven
@@ -79,6 +81,32 @@ def _external_series(value, n_frames: int, name: str, *, ndim: int = 1) -> np.nd
     if ndim == 2 and (arr.ndim != 2 or arr.shape[1] != 3):
         raise ValueError(f"{name} must have shape [n_frames, 3].")
     return arr
+
+
+def _truth_frequency_series(params: SimParams, n_frames: int, fallback_hz: float) -> np.ndarray:
+    spin = getattr(params.geometry, "external_spin_hz", None)
+    if spin is not None:
+        spin_t = np.asarray(spin, dtype=np.float64)
+        if spin_t.ndim == 1 and spin_t.shape[0] == n_frames:
+            return np.maximum(spin_t, 0.0)
+
+    prop_spin = getattr(params.geometry, "external_propeller_spin_hz", None)
+    if prop_spin is not None:
+        prop_spin_t = np.asarray(prop_spin, dtype=np.float64)
+        if prop_spin_t.ndim == 2 and prop_spin_t.shape[0] == n_frames and prop_spin_t.shape[1] > 0:
+            return np.maximum(np.mean(prop_spin_t, axis=1), 0.0)
+
+    return np.full(n_frames, max(float(fallback_hz), 0.0), dtype=np.float64)
+
+
+def _truth_propeller_frequency_series(params: SimParams, n_frames: int) -> np.ndarray | None:
+    prop_spin = getattr(params.geometry, "external_propeller_spin_hz", None)
+    if prop_spin is None:
+        return None
+    prop_spin_t = np.asarray(prop_spin, dtype=np.float64)
+    if prop_spin_t.ndim != 2 or prop_spin_t.shape[0] != n_frames or prop_spin_t.shape[1] != 4:
+        return None
+    return np.maximum(prop_spin_t, 0.0)
 
 
 def _build_external_geometry(t: np.ndarray, params: SimParams) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
@@ -371,19 +399,46 @@ def _background_series(
     phase_angle_t: np.ndarray,
     los_unit_t: np.ndarray,
     params: SimParams,
+    pixel_ifov_urad: float | None = None,
 ) -> np.ndarray:
     """返回场景杂散光背景时间序列 (cps/pixel)。
 
-    综合了时间漂移和太阳相位角几何因子，两者作用于同一基底速率。
+    综合了用户指定杂散光、太阳驱动环境光、时间漂移和太阳相位角几何因子。
     """
+    del los_unit_t
+    modulation = _background_modulation(t, phase_angle_t, params)
+    scene_rate = float(params.background.scene_stray_rate_cps_per_pixel)
+    solar_environment_rate = _solar_environment_background_rate_cps_per_pixel(params, pixel_ifov_urad)
+    return ((scene_rate + solar_environment_rate) * modulation).astype(np.float64)
+
+
+def _background_modulation(t: np.ndarray, phase_angle_t: np.ndarray, params: SimParams) -> np.ndarray:
     drift = 1.0 + params.background.temporal_drift_depth * np.cos(
         2.0 * np.pi * params.background.temporal_drift_hz * t + 0.5
     )
     drift = np.maximum(drift, 0.1)
-    scene_rate = np.full_like(t, params.background.scene_stray_rate_cps_per_pixel, dtype=np.float64)
     solar_elongation = np.clip(np.cos(phase_angle_t), -1.0, 1.0)
     geometry = 0.35 + 0.65 * np.clip(0.5 + 0.5 * solar_elongation, 0.0, 1.0)
-    return (scene_rate * geometry * drift).astype(np.float64)
+    return (geometry * drift).astype(np.float64)
+
+
+def _solar_environment_background_rate_cps_per_pixel(params: SimParams, pixel_ifov_urad: float | None = None) -> float:
+    if pixel_ifov_urad is None:
+        pixel_ifov_urad = max(float(params.optical.detector_fov_urad), 1e-6) / max(
+            float(max(params.image.roi_w, params.image.roi_h)),
+            1.0,
+        )
+    return solar_environment_detected_rate_cps_per_pixel(
+        irradiance_w_m2_nm=params.target.solar_irradiance_w_m2_nm,
+        filter_bandwidth_nm=params.optical.filter_bandwidth_nm,
+        wavelength_nm=params.optical.wavelength_nm,
+        aperture_diameter_m=params.optical.aperture_diameter_m,
+        receiver_efficiency=params.optical.receiver_efficiency,
+        quantum_efficiency=params.optical.quantum_efficiency,
+        pixel_ifov_urad=pixel_ifov_urad,
+        stray_light_rejection_ratio=params.optical.stray_light_rejection_ratio,
+        visibility_km=params.optical.atmospheric_visibility_km,
+    )
 
 
 def _background_scaling(params: SimParams, pixel_ifov_urad: float) -> float:
@@ -401,6 +456,30 @@ def _shot_noise_snr_db(total_signal: float, total_noise: float) -> float:
     """
     denominator = np.sqrt(max(total_signal + total_noise, 1e-24))
     return float(20.0 * np.log10(max(total_signal, 1e-12) / denominator))
+
+
+def _manual_sbr_background_per_frame(
+    *,
+    actual_signal_per_frame: np.ndarray,
+    reference_signal_per_frame: np.ndarray,
+    background_profile: np.ndarray,
+    manual_sbr: float,
+    pde_mean: float,
+) -> np.ndarray:
+    """按整段 SBR 分配手动背景，避免背景逐帧跟随目标机械调制。"""
+    actual = np.maximum(np.asarray(actual_signal_per_frame, dtype=np.float64), 0.0)
+    reference = np.maximum(np.asarray(reference_signal_per_frame, dtype=np.float64), 0.0) * max(float(pde_mean), 0.0)
+    profile = np.maximum(np.asarray(background_profile, dtype=np.float64), 0.0)
+    if profile.size != actual.size:
+        profile = np.ones_like(actual)
+    if float(np.sum(profile)) <= 0.0:
+        profile = np.ones_like(actual)
+
+    signal_total = float(np.sum(actual))
+    if signal_total <= 0.0:
+        signal_total = float(np.sum(reference))
+    background_total = signal_total / max(float(manual_sbr), 1e-12)
+    return background_total * profile / max(float(np.sum(profile)), 1e-12)
 
 
 def _event_stream_from_counts(
@@ -623,6 +702,94 @@ def _frontend_blade_world_points(
     return points
 
 
+def _project_frontend_blade_local_points_to_pixels(
+    target_pos: tuple[float, float, float],
+    local_x_m: np.ndarray,
+    local_z_m: np.ndarray,
+    angle_rad: float,
+    pitch_rad: float,
+    params: SimParams,
+    roi_h: int,
+    roi_w: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    local_x = np.asarray(local_x_m, dtype=np.float64)
+    local_z = np.asarray(local_z_m, dtype=np.float64)
+
+    cos_a = float(np.cos(angle_rad))
+    sin_a = float(np.sin(angle_rad))
+    cos_p = float(np.cos(pitch_rad))
+    sin_p = float(np.sin(pitch_rad))
+    yawed_shape_x = local_x * cos_a - local_z * sin_a
+    yawed_shape_z = local_x * sin_a + local_z * cos_a
+    world_x = float(target_pos[0]) + yawed_shape_x
+    world_y = float(target_pos[1]) - yawed_shape_z * sin_p
+    world_z = float(target_pos[2]) + yawed_shape_z * cos_p
+
+    detector_x = float(getattr(params.geometry, "detector_position_x_m", 0.0))
+    detector_y = float(getattr(params.geometry, "detector_position_y_m", 0.0))
+    detector_z = float(getattr(params.geometry, "detector_position_z_m", 0.0))
+    rel_x = world_x - detector_x
+    rel_y = world_y - detector_y
+    rel_z = world_z - detector_z
+
+    yaw_rad = np.deg2rad(float(getattr(params.geometry, "detector_yaw_deg", 0.0)))
+    pitch_camera_rad = np.deg2rad(float(getattr(params.geometry, "detector_pitch_deg", 0.0)))
+    cos_yaw = float(np.cos(-yaw_rad))
+    sin_yaw = float(np.sin(-yaw_rad))
+    yawed_x = rel_x * cos_yaw - rel_z * sin_yaw
+    yawed_z = rel_x * sin_yaw + rel_z * cos_yaw
+
+    cos_pitch = float(np.cos(-pitch_camera_rad))
+    sin_pitch = float(np.sin(-pitch_camera_rad))
+    camera_y = rel_y * cos_pitch - yawed_z * sin_pitch
+    camera_z = rel_y * sin_pitch + yawed_z * cos_pitch
+    valid = camera_z > 0.1
+
+    fov_rad = max(float(params.optical.detector_fov_urad) * 1e-6, 1e-9)
+    f_pixel = (roi_w / 2.0) / max(float(np.tan(fov_rad / 2.0)), 1e-12)
+    safe_z = np.where(valid, camera_z, 1.0)
+    cols = roi_w / 2.0 + f_pixel * (yawed_x / safe_z)
+    rows = roi_h / 2.0 - f_pixel * (camera_y / safe_z)
+    return cols, rows, valid
+
+
+def _blade_pitch_return_factor(
+    pitch_rad: float,
+    params: SimParams,
+    frame_idx: int,
+    target_pos: tuple[float, float, float] | None,
+) -> float:
+    if target_pos is not None:
+        detector = np.array(
+            [
+                float(getattr(params.geometry, "detector_position_x_m", 0.0)),
+                float(getattr(params.geometry, "detector_position_y_m", 0.0)),
+                float(getattr(params.geometry, "detector_position_z_m", 0.0)),
+            ],
+            dtype=np.float64,
+        )
+        direction = detector - np.asarray(target_pos, dtype=np.float64)
+    else:
+        los = getattr(params.geometry, "external_los_unit", None)
+        if los is not None:
+            direction = -np.asarray(los[min(frame_idx, np.asarray(los).shape[0] - 1)], dtype=np.float64)
+        else:
+            direction = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+
+    direction_norm = float(np.linalg.norm(direction))
+    if direction_norm <= 1e-12:
+        return 1.0
+    view = direction / direction_norm
+    normal = np.array([0.0, np.cos(pitch_rad), -np.sin(pitch_rad)], dtype=np.float64)
+    if float(np.dot(normal, view)) < 0:
+        normal = -normal
+    lambert = max(float(np.dot(normal, view)), 0.0) ** 2
+    angle = float(np.arccos(np.clip(np.dot(normal, view), -1.0, 1.0)))
+    specular_width = np.deg2rad(8.0)
+    specular = 0.2 * np.exp(-(angle * angle) / (2.0 * specular_width * specular_width))
+    return float(np.clip(0.12 + 0.88 * lambert * (1.0 + specular), 0.0, 1.4))
+
+
 def _frontend_drone_world_points(
     target_pos: tuple[float, float, float],
     local_points: list[tuple[float, float]],
@@ -695,6 +862,7 @@ def _shape_signal_distribution_cube(
 
     yy, xx = np.mgrid[0:roi_h, 0:roi_w].astype(np.float64)
     cube = np.zeros((signal_total_t.size, roi_h, roi_w), dtype=np.float64)
+    projected_signal_total_t = np.asarray(signal_total_t, dtype=np.float64).copy()
     use_frontend_projection = _has_external_target(params)
     shape_mask_cache: dict[tuple, np.ndarray] = {}
 
@@ -733,6 +901,7 @@ def _shape_signal_distribution_cube(
             angle = phase if np.isfinite(phase) else 2.0 * np.pi * spin_hz * float(t[frame_idx]) + float(params.target.phase1)
             pitch_deg = _series_value(getattr(params.geometry, "external_pitch_deg", None), frame_idx, getattr(params.target, "orientation_pitch_deg", 0.0))
             pitch_rad = np.deg2rad(pitch_deg)
+            projected_signal_total_t[frame_idx] = photons * _blade_pitch_return_factor(pitch_rad, params, frame_idx, target_pos)
             meters_to_pixels = max(width, height, 1e-6) / max(float(params.target.target_length_m), 1e-6)
             custom_x = getattr(params.target, "custom_shape_x", None)
             custom_y = getattr(params.target, "custom_shape_y", None)
@@ -756,15 +925,27 @@ def _shape_signal_distribution_cube(
                     blade_length = float(params.target.target_length_m)
                     geom_w = blade_length if aspect >= 1.0 else blade_length * aspect
                     geom_h = blade_length / aspect if aspect >= 1.0 else blade_length
-                    for px_n, py_n, intensity in zip(custom_x, custom_y, custom_i):
-                        local_point = (float(px_n) * geom_w, float(py_n) * geom_h)
-                        if target_pos is not None:
-                            world_point = _frontend_blade_world_points(target_pos, [local_point], angle, pitch_rad)[0]
-                            projected = _project_world_point_to_pixel(world_point, params, roi_h, roi_w)
-                            if projected is None:
-                                continue
-                            col_f, row_f, _distance = projected
-                        else:
+                    local_x = np.asarray(custom_x, dtype=np.float64) * geom_w
+                    local_z = np.asarray(custom_y, dtype=np.float64) * geom_h
+                    intensities = np.maximum(np.asarray(custom_i, dtype=np.float64), 0.0)
+                    if target_pos is not None:
+                        col_f, row_f, valid = _project_frontend_blade_local_points_to_pixels(
+                            target_pos,
+                            local_x,
+                            local_z,
+                            angle,
+                            pitch_rad,
+                            params,
+                            roi_h,
+                            roi_w,
+                        )
+                        cols = np.rint(col_f).astype(np.int64)
+                        rows = np.rint(row_f).astype(np.int64)
+                        in_bounds = valid & (rows >= 0) & (rows < roi_h) & (cols >= 0) & (cols < roi_w) & (intensities > 0)
+                        if np.any(in_bounds):
+                            np.add.at(mask, (rows[in_bounds], cols[in_bounds]), intensities[in_bounds])
+                    else:
+                        for local_point, intensity in zip(zip(local_x, local_z), intensities):
                             [(col_f, row_f)] = _project_blade_local_points(
                                 cx,
                                 cy,
@@ -773,30 +954,47 @@ def _shape_signal_distribution_cube(
                                 pitch_rad,
                                 meters_to_pixels,
                             )
-                        col = int(round(col_f))
-                        row = int(round(row_f))
-                        if 0 <= row < roi_h and 0 <= col < roi_w:
-                            mask[row, col] += max(float(intensity), 0.0)
+                            col = int(round(col_f))
+                            row = int(round(row_f))
+                            if 0 <= row < roi_h and 0 <= col < roi_w:
+                                mask[row, col] += float(intensity)
                     if np.sum(mask) <= 0 and target_pos is None:
                         mask[int(np.clip(round(cy), 0, roi_h - 1)), int(np.clip(round(cx), 0, roi_w - 1))] = 1.0
                     if len(shape_mask_cache) < 256:
                         shape_mask_cache[cache_key] = mask
             else:
-                mask = np.zeros((roi_h, roi_w), dtype=np.float64)
-                blade_length = float(max(params.target.target_length_m, 1e-6))
-                blade_width = float(max(params.target.target_width_m, 1e-6))
-                corners = [
-                    (-blade_width / 2.0, 0.0),
-                    (blade_width / 2.0, 0.0),
-                    (blade_width / 2.0, blade_length),
-                    (-blade_width / 2.0, blade_length),
-                ]
-                if target_pos is not None:
-                    world_points = _frontend_blade_world_points(target_pos, corners, angle, pitch_rad)
-                    projected = _project_world_polygon(world_points, params, roi_h, roi_w)
+                cache_key = (
+                    "blade_strip",
+                    int(round((float(angle) % (2.0 * np.pi)) / (2.0 * np.pi) * 128.0)) % 128,
+                    round(float(pitch_rad), 6),
+                    tuple(round(float(v), 5) for v in target_pos) if target_pos is not None else None,
+                    round(float(cx), 4),
+                    round(float(cy), 4),
+                    round(float(meters_to_pixels), 4),
+                    round(float(params.target.target_length_m), 6),
+                    round(float(params.target.target_width_m), 6),
+                )
+                cached_mask = shape_mask_cache.get(cache_key)
+                if cached_mask is not None:
+                    mask = cached_mask
                 else:
-                    projected = _project_blade_local_points(cx, cy, corners, angle, pitch_rad, meters_to_pixels)
-                _add_projected_polygon(mask, projected, 1.0)
+                    mask = np.zeros((roi_h, roi_w), dtype=np.float64)
+                    blade_length = float(max(params.target.target_length_m, 1e-6))
+                    blade_width = float(max(params.target.target_width_m, 1e-6))
+                    corners = [
+                        (-blade_width / 2.0, 0.0),
+                        (blade_width / 2.0, 0.0),
+                        (blade_width / 2.0, blade_length),
+                        (-blade_width / 2.0, blade_length),
+                    ]
+                    if target_pos is not None:
+                        world_points = _frontend_blade_world_points(target_pos, corners, angle, pitch_rad)
+                        projected = _project_world_polygon(world_points, params, roi_h, roi_w)
+                    else:
+                        projected = _project_blade_local_points(cx, cy, corners, angle, pitch_rad, meters_to_pixels)
+                    _add_projected_polygon(mask, projected, 1.0)
+                    if len(shape_mask_cache) < 256:
+                        shape_mask_cache[cache_key] = mask
 
         else:
             mask = np.zeros((roi_h, roi_w), dtype=np.float64)
@@ -910,12 +1108,12 @@ def _shape_signal_distribution_cube(
         cube[frame_idx] = photons * mask / total
 
     totals = np.sum(cube, axis=(1, 2), keepdims=True)
-    cube = np.divide(cube, np.maximum(totals, 1e-12), out=np.zeros_like(cube), where=totals > 0) * signal_total_t[:, None, None]
+    cube = np.divide(cube, np.maximum(totals, 1e-12), out=np.zeros_like(cube), where=totals > 0) * projected_signal_total_t[:, None, None]
     display_blur_x = max(float(blur_sigma_x), 1.05 if str(params.target.body_shape or "") == "drone_quad" else 0.65)
     display_blur_y = max(float(blur_sigma_y), 1.05 if str(params.target.body_shape or "") == "drone_quad" else 0.65)
     cube = _apply_separable_blur(cube, display_blur_x, display_blur_y)
     totals = np.sum(cube, axis=(1, 2), keepdims=True)
-    cube = np.divide(cube, np.maximum(totals, 1e-12), out=np.zeros_like(cube), where=totals > 0) * signal_total_t[:, None, None]
+    cube = np.divide(cube, np.maximum(totals, 1e-12), out=np.zeros_like(cube), where=totals > 0) * projected_signal_total_t[:, None, None]
     return cube * pde_map[None, :, :]
 
 
@@ -938,6 +1136,9 @@ def simulate_active_spad(params: SimParams):
     ) = _target_signal(
         t, R_t, sun_unit_t, los_unit_t, phase_angle_t, params
     )
+    truth_frequency_series_hz = _truth_frequency_series(params, n_frames, truth_freq_hz)
+    truth_propeller_frequency_series_hz = _truth_propeller_frequency_series(params, n_frames)
+    truth_freq_hz = float(np.mean(truth_frequency_series_hz)) if truth_frequency_series_hz.size else max(float(truth_freq_hz), 0.0)
     total_fov_urad, pixel_ifov_urad, off_axis_urad = _detector_geometry(params)
     fov_half_urad = total_fov_urad / 2.0
     sigma_scale = np.clip(50.0 / max(pixel_ifov_urad, 1e-6), 0.65, 2.5)
@@ -964,10 +1165,22 @@ def simulate_active_spad(params: SimParams):
         glint_flags = rng.random(n_frames) < params.target.glint_probability
         glint_t[glint_flags] = params.target.glint_gain
 
-    bg_base_t = _background_series(t, phase_angle_t, los_unit_t, params)
+    background_noise_mode = str(
+        getattr(params.background, "background_noise_mode", "solar_environment") or "solar_environment"
+    ).lower()
+    manual_sbr_enabled = background_noise_mode == "manual_sbr"
+
+    bg_base_t = _background_series(t, phase_angle_t, los_unit_t, params, pixel_ifov_urad)
     bg_scale = _background_scaling(params, pixel_ifov_urad)
     bg_base_t = bg_base_t * bg_scale
-    bg_scene_stray_t = bg_base_t.copy()  # 场景杂散分量与基底速率共用同一模型，保留命名以保持诊断输出兼容
+    bg_modulation_t = _background_modulation(t, phase_angle_t, params) * bg_scale
+    bg_scene_stray_t = float(params.background.scene_stray_rate_cps_per_pixel) * bg_modulation_t
+    bg_solar_environment_t = _solar_environment_background_rate_cps_per_pixel(params, pixel_ifov_urad) * bg_modulation_t
+    bg_manual_sbr_t = np.zeros_like(bg_base_t)
+    if manual_sbr_enabled:
+        bg_base_t = np.zeros_like(bg_base_t)
+        bg_scene_stray_t = np.zeros_like(bg_scene_stray_t)
+        bg_solar_environment_t = np.zeros_like(bg_solar_environment_t)
     bg_spatial = background_spatial_map(
         roi_h,
         roi_w,
@@ -1108,6 +1321,14 @@ def simulate_active_spad(params: SimParams):
     final_laser_rate_cps_t = laser_rate_cps_t * common_detection_factor_t
     final_rate_cps_t = final_solar_rate_cps_t + final_laser_rate_cps_t
     expected_signal_t = final_rate_cps_t * dt
+    manual_sbr_reference_signal_t = (
+        (solar_rate_cps_t + laser_rate_cps_t)
+        * atmospheric_t
+        * visibility_t
+        * glint_t
+        * dt
+    )
+    manual_sbr_background_profile_t = bg_modulation_t
     body_vertices = simple_body_vertices(params.target.body_shape, target_area_m2=params.target.target_area_m2)
     projected_width_urad_t, projected_height_urad_t = projected_extent_series_from_vertices(
         body_vertices,
@@ -1117,35 +1338,195 @@ def simulate_active_spad(params: SimParams):
     )
     projected_width_px_t = projected_width_urad_t / max(pixel_ifov_urad, 1e-6)
     projected_height_px_t = projected_height_urad_t / max(pixel_ifov_urad, 1e-6)
-    signal_cube = _shape_signal_distribution_cube(
-        expected_signal_t,
-        cx_t,
-        cy_t,
-        roi_h,
-        roi_w,
-        projected_width_px_t,
-        projected_height_px_t,
-        t,
-        params,
-        blur_sigma_x,
-        blur_sigma_y,
-        pde_map,
-    )
     pde_safe = np.maximum(pde_map, 1e-12)
-    expected_signal_map = np.sum(signal_cube / pde_safe[None, :, :], axis=0).astype(np.float32)
-
-    dark_expected_cube = dark_map[None, :, :] * dt
-    bg_expected_cube = bg_cube * dt * pde_map[None, :, :]
-    mu_total = signal_cube + bg_expected_cube + dark_expected_cube
-    ideal_rate = mu_total / max(dt, 1e-12)
-    effective_rate = apply_dead_time_rate(ideal_rate, params.spad.dead_time_ns * 1e-9, model=params.spad.dead_time_model)
-    mu_corrected = effective_rate * dt
-    counts, sample_backend = sample_poisson_counts_accelerated(
-        mu_corrected,
-        rng,
-        requested_backend=params.compute_backend,
-        seed=params.seed,
+    summary_only = (
+        bool(getattr(params, "summary_only", False))
+        and params.simulation_mode != "event"
+        and not params.save_event_list
+        and not params.save_truth_series
+        and float(params.spad.afterpulse_probability) <= 0.0
+        and float(params.spad.crosstalk_probability) <= 0.0
     )
+
+    if summary_only:
+        target_chunk_bytes = max(8 * 1024 * 1024, int(os.environ.get("SPAD_SUMMARY_CHUNK_BYTES", str(128 * 1024 * 1024))))
+        bytes_per_frame = max(roi_h * roi_w * np.dtype(np.float64).itemsize * 4, 1)
+        chunk_frames = max(1, min(n_frames, target_chunk_bytes // bytes_per_frame))
+        manual_sbr = max(float(getattr(params.background, "manual_signal_background_ratio", 10.0)), 1e-12)
+        manual_background_per_frame_all: np.ndarray | None = None
+        pde_mean = float(np.mean(pde_map))
+        if manual_sbr_enabled:
+            manual_signal_per_frame_all = np.zeros(n_frames, dtype=np.float64)
+            for start in range(0, n_frames, chunk_frames):
+                end = min(start + chunk_frames, n_frames)
+                frame_slice = slice(start, end)
+                signal_probe = _shape_signal_distribution_cube(
+                    expected_signal_t[frame_slice],
+                    cx_t[frame_slice],
+                    cy_t[frame_slice],
+                    roi_h,
+                    roi_w,
+                    projected_width_px_t[frame_slice],
+                    projected_height_px_t[frame_slice],
+                    t[frame_slice],
+                    params,
+                    blur_sigma_x,
+                    blur_sigma_y,
+                    pde_map,
+                )
+                manual_signal_per_frame_all[frame_slice] = np.sum(signal_probe, axis=(1, 2))
+            manual_background_per_frame_all = _manual_sbr_background_per_frame(
+                actual_signal_per_frame=manual_signal_per_frame_all,
+                reference_signal_per_frame=manual_sbr_reference_signal_t,
+                background_profile=manual_sbr_background_profile_t,
+                manual_sbr=manual_sbr,
+                pde_mean=pde_mean,
+            )
+        expected_signal_map_acc = np.zeros((roi_h, roi_w), dtype=np.float64)
+        total_signal = 0.0
+        total_background = 0.0
+        total_dark = float(np.sum(dark_map) * dt * n_frames)
+        mu_total_sum = 0.0
+        mu_corrected_sum = 0.0
+        ideal_rate_max = 0.0
+        preview_counts = np.zeros((roi_h, roi_w), dtype=np.int64)
+        observed_total_counts = 0
+        saturation_warning = False
+        sample_backend: str | None = None
+        for start in range(0, n_frames, chunk_frames):
+            end = min(start + chunk_frames, n_frames)
+            frame_slice = slice(start, end)
+            signal_chunk = _shape_signal_distribution_cube(
+                expected_signal_t[frame_slice],
+                cx_t[frame_slice],
+                cy_t[frame_slice],
+                roi_h,
+                roi_w,
+                projected_width_px_t[frame_slice],
+                projected_height_px_t[frame_slice],
+                t[frame_slice],
+                params,
+                blur_sigma_x,
+                blur_sigma_y,
+                pde_map,
+            )
+            expected_signal_map_acc += np.sum(signal_chunk / pde_safe[None, :, :], axis=0)
+            dark_chunk = dark_map[None, :, :] * dt
+            if manual_sbr_enabled:
+                assert manual_background_per_frame_all is not None
+                manual_background_per_frame = manual_background_per_frame_all[frame_slice]
+                bg_weights = bg_spatial * pde_map
+                weight_sum = float(np.sum(bg_weights))
+                if weight_sum <= 0:
+                    bg_weights = np.ones_like(bg_spatial)
+                    weight_sum = float(np.sum(bg_weights))
+                bg_chunk = manual_background_per_frame[:, None, None] * bg_weights[None, :, :] / weight_sum
+                bg_manual_sbr_t[frame_slice] = manual_background_per_frame / max(dt, 1e-12) / max(roi_h * roi_w, 1)
+            else:
+                bg_chunk = bg_base_t[frame_slice, None, None] * bg_spatial[None, :, :] * dt * pde_map[None, :, :]
+            mu_total_chunk = signal_chunk + bg_chunk + dark_chunk
+            ideal_rate_chunk = mu_total_chunk / max(dt, 1e-12)
+            effective_rate_chunk = apply_dead_time_rate(
+                ideal_rate_chunk,
+                params.spad.dead_time_ns * 1e-9,
+                model=params.spad.dead_time_model,
+            )
+            mu_corrected_chunk = effective_rate_chunk * dt
+            sampled_chunk, actual_backend = sample_poisson_counts_accelerated(
+                mu_corrected_chunk,
+                rng,
+                requested_backend=params.compute_backend,
+                seed=params.seed + start,
+            )
+            sample_backend = actual_backend
+            saturation_warning = saturation_warning or bool(
+                np.any(sampled_chunk > params.spad.max_count_per_frame)
+                or np.max(ideal_rate_chunk) > params.spad.max_count_rate_cps_per_pixel
+            )
+            sampled_chunk = np.clip(sampled_chunk, 0, params.spad.max_count_per_frame)
+            preview_counts += np.sum(sampled_chunk, axis=0, dtype=np.int64)
+            observed_total_counts += int(np.sum(sampled_chunk, dtype=np.int64))
+            total_signal += float(np.sum(signal_chunk))
+            total_background += float(np.sum(bg_chunk))
+            mu_total_sum += float(np.sum(mu_total_chunk))
+            mu_corrected_sum += float(np.sum(mu_corrected_chunk))
+            ideal_rate_max = max(ideal_rate_max, float(np.max(ideal_rate_chunk)))
+
+        counts = np.zeros((0, roi_h, roi_w), dtype=np.uint16)
+        sample_backend = sample_backend or "cpu"
+        expected_signal_map = expected_signal_map_acc.astype(np.float32)
+        mean_signal_per_frame = total_signal / max(n_frames, 1)
+        mean_background_per_frame = total_background / max(n_frames, 1)
+        mean_dark_per_frame = total_dark / max(n_frames, 1)
+        total_noise = total_background + total_dark
+        dead_time_loss_ratio = float(np.clip(1.0 - (mu_corrected_sum + 1e-12) / (mu_total_sum + 1e-12), 0.0, 1.0))
+        signal_cube = np.zeros((0, roi_h, roi_w), dtype=np.float32)
+        bg_expected_cube = np.zeros((0, roi_h, roi_w), dtype=np.float32)
+        dark_expected_cube = np.zeros((0, roi_h, roi_w), dtype=np.float32)
+        summary_only_stats = {
+            "mean_signal_per_frame": mean_signal_per_frame,
+            "mean_background_per_frame": mean_background_per_frame,
+            "mean_dark_per_frame": mean_dark_per_frame,
+            "total_signal": total_signal,
+            "total_background": total_background,
+            "total_noise": total_noise,
+            "dead_time_loss_ratio": dead_time_loss_ratio,
+            "saturation_warning": saturation_warning,
+            "observed_total_counts": observed_total_counts,
+        }
+        mu_corrected = np.asarray([mu_corrected_sum], dtype=np.float64)
+        mu_total = np.asarray([mu_total_sum], dtype=np.float64)
+        ideal_rate = np.asarray([ideal_rate_max], dtype=np.float64)
+        signal_cube = np.asarray([[[total_signal]]], dtype=np.float64)
+        bg_expected_cube = np.asarray([[[total_background]]], dtype=np.float64)
+        dark_expected_cube = np.asarray([[[total_dark]]], dtype=np.float64)
+    else:
+        signal_cube = _shape_signal_distribution_cube(
+            expected_signal_t,
+            cx_t,
+            cy_t,
+            roi_h,
+            roi_w,
+            projected_width_px_t,
+            projected_height_px_t,
+            t,
+            params,
+            blur_sigma_x,
+            blur_sigma_y,
+            pde_map,
+        )
+        expected_signal_map = np.sum(signal_cube / pde_safe[None, :, :], axis=0).astype(np.float32)
+
+        dark_expected_cube = dark_map[None, :, :] * dt
+        if manual_sbr_enabled:
+            manual_sbr = max(float(getattr(params.background, "manual_signal_background_ratio", 10.0)), 1e-12)
+            signal_per_frame = np.sum(signal_cube, axis=(1, 2))
+            manual_background_per_frame = _manual_sbr_background_per_frame(
+                actual_signal_per_frame=signal_per_frame,
+                reference_signal_per_frame=manual_sbr_reference_signal_t,
+                background_profile=manual_sbr_background_profile_t,
+                manual_sbr=manual_sbr,
+                pde_mean=float(np.mean(pde_map)),
+            )
+            bg_weights = bg_spatial * pde_map
+            weight_sum = float(np.sum(bg_weights))
+            if weight_sum <= 0:
+                bg_weights = np.ones_like(bg_spatial)
+                weight_sum = float(np.sum(bg_weights))
+            bg_expected_cube = manual_background_per_frame[:, None, None] * bg_weights[None, :, :] / weight_sum
+            bg_manual_sbr_t = manual_background_per_frame / max(dt, 1e-12) / max(roi_h * roi_w, 1)
+        else:
+            bg_expected_cube = bg_cube * dt * pde_map[None, :, :]
+        mu_total = signal_cube + bg_expected_cube + dark_expected_cube
+        ideal_rate = mu_total / max(dt, 1e-12)
+        effective_rate = apply_dead_time_rate(ideal_rate, params.spad.dead_time_ns * 1e-9, model=params.spad.dead_time_model)
+        mu_corrected = effective_rate * dt
+        counts, sample_backend = sample_poisson_counts_accelerated(
+            mu_corrected,
+            rng,
+            requested_backend=params.compute_backend,
+            seed=params.seed,
+        )
 
     if params.spad.afterpulse_probability > 0:
         # 后脉冲由实际检测到的雪崩事件触发，因此基于已采样的 counts 而非理想光子数
@@ -1182,6 +1563,17 @@ def simulate_active_spad(params: SimParams):
             1.0,
         )
     )
+    if summary_only:
+        mean_signal_per_frame = summary_only_stats["mean_signal_per_frame"]
+        mean_background_per_frame = summary_only_stats["mean_background_per_frame"]
+        mean_dark_per_frame = summary_only_stats["mean_dark_per_frame"]
+        total_signal = summary_only_stats["total_signal"]
+        total_background = summary_only_stats["total_background"]
+        total_noise = summary_only_stats["total_noise"]
+        dead_time_loss_ratio = summary_only_stats["dead_time_loss_ratio"]
+        signal_cube = np.zeros((0, roi_h, roi_w), dtype=np.float32)
+        bg_expected_cube = np.zeros((0, roi_h, roi_w), dtype=np.float32)
+        dark_expected_cube = np.zeros((0, roi_h, roi_w), dtype=np.float32)
     snr_db = _shot_noise_snr_db(total_signal, total_noise)
 
     valid_truth = truth_in_fov_t > 0
@@ -1269,6 +1661,10 @@ def simulate_active_spad(params: SimParams):
         "roi_w": roi_w,
         "sample_rate_hz": params.sample_rate_hz,
         "truth_freq_hz": truth_freq_hz,
+        "truth_frequency_series_hz": truth_frequency_series_hz.astype(np.float32),
+        "truth_propeller_frequency_series_hz": truth_propeller_frequency_series_hz.astype(np.float32)
+        if truth_propeller_frequency_series_hz is not None
+        else None,
         "truth_precession_hz": truth_precession_hz,
         "truth_pixel": truth_pixel,
         "truth_row": truth_row,
@@ -1298,7 +1694,8 @@ def simulate_active_spad(params: SimParams):
         "bg_spatial_map": bg_spatial.astype(np.float32),
         "total_signal_expected": int(round(total_signal)),
         "total_noise_expected": int(round(total_noise)),
-        "observed_total_counts": int(np.sum(counts)),
+        "observed_total_counts": summary_only_stats["observed_total_counts"] if summary_only else int(np.sum(counts)),
+        "preview_counts": preview_counts if summary_only else None,
         "snr_db": float(snr_db),
         "target_detected_rate_cps": float(np.mean(final_rate_cps_t)),
         "target_laser_detected_rate_cps": float(np.mean(final_laser_rate_cps_t)),
@@ -1319,7 +1716,7 @@ def simulate_active_spad(params: SimParams):
         "atmospheric_path_length_m_mean": float(np.mean(atmospheric_path_length_m)),
         "mean_in_fov_ratio": float(np.mean(truth_in_fov_t)),
         "dead_time_loss_ratio": dead_time_loss_ratio,
-        "saturation_warning": bool(np.any(saturation_mask) or np.max(ideal_rate) > params.spad.max_count_rate_cps_per_pixel),
+        "saturation_warning": summary_only_stats["saturation_warning"] if summary_only else bool(np.any(saturation_mask) or np.max(ideal_rate) > params.spad.max_count_rate_cps_per_pixel),
         "visibility_ratio": float(np.mean(visibility_t > 0)),
         "dropout_ratio": float(1.0 - np.mean(visibility_t > 0)),
         "outage_mode": getattr(params.target, "outage_mode", "random_segments"),
@@ -1328,6 +1725,8 @@ def simulate_active_spad(params: SimParams):
         "params": asdict(params),
         "background_components": {
             "scene_stray": bg_scene_stray_t.astype(np.float32),
+            "solar_environment": bg_solar_environment_t.astype(np.float32),
+            "manual_sbr": bg_manual_sbr_t.astype(np.float32),
         },
     }
     return result

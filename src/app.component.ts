@@ -4,7 +4,7 @@ import { SimulationViewComponent } from './components/simulation-view/simulation
 @Component({
   selector: 'app-root',
   template: `
-    <main class="h-screen w-screen bg-gray-900">
+    <main class="h-[100dvh] w-screen overflow-hidden bg-[#f5f7f8]">
       <app-simulation-view />
     </main>
   `,

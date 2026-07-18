@@ -69,7 +69,7 @@ tdc_frame_cube.metadata.json — 配套元数据
 类型: uint16
 含义: tdc[frame, row, col] = 该帧该像素检测到的 TDC bin（1-based）
 
-空像素: tdcMaxCount + 2
+空像素: 0（有效 TDC bin 范围为 1..tdcMaxCount）
 有效范围: 1 ≤ tdc_bin ≤ tdcMaxCount
 ```
 
@@ -186,3 +186,18 @@ timing_jitter_range_sigma_m = c × timing_jitter_ns × 1e-9 / 2
 新版 `spad-detector` 的默认主输出是 photon-count cube（每 pixel 存光子计数），更适合科研定量分析。
 
 TDC frame cube 作为可选导出保留了与旧格式的兼容性，但不应作为主数据格式。
+
+---
+
+## 数据契约与完整性校验
+
+新导出数据使用 `spad-dataset` 1.0.0 契约。每个 metadata 文件包含：
+
+- `schema.name` 与 `schema.version`：数据契约名称和版本。
+- `format`：`count_cube`、`tdc_frame_cube` 或 `event_list`，用于确定数值语义。
+- `dtype`、`shape`、`layout`：二进制解码所需的完整结构信息。
+- `sample_rate_hz`、`tdc_bin_width_ns`、`empty_pixel_value`：时间采样和空事件定义。
+- `random_seed`、`assumptions`、`warnings`：复现实验所需的随机性与模型边界。
+- `artifact.bytes` 与 `artifact.sha256`：载荷大小和 SHA-256 完整性校验值。
+
+`bundle.zip` 额外包含 `manifest.json`，集中列出 `counts.bin`、`tdc_frame_cube.bin` 和 `events.npz` 中实际存在的载荷及其角色、大小和 SHA-256。算法程序应先读取 metadata 和 manifest，完成格式与完整性校验后再运行。

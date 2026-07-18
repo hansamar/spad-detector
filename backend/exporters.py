@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import tempfile
@@ -17,6 +18,8 @@ from pathlib import Path
 import numpy as np
 
 SPEED_OF_LIGHT_MS = 299_792_458.0
+DATASET_SCHEMA_NAME = "spad-dataset"
+DATASET_SCHEMA_VERSION = "1.0.0"
 
 
 class ExportFormat(str, Enum):
@@ -42,6 +45,23 @@ class EventSource(int, Enum):
 def _utc_now_iso() -> str:
     """返回 UTC ISO 时间字符串。"""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _artifact_descriptor(path: Path, *, role: str) -> dict:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": path.name,
+        "role": role,
+        "bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _metadata_with_artifact(metadata: dict, path: Path, *, role: str) -> dict:
+    return {**metadata, "artifact": _artifact_descriptor(path, role=role)}
 
 
 def frame_tof_diagnostics(
@@ -109,6 +129,10 @@ def build_metadata(
     )
 
     meta: dict = {
+        "schema": {
+            "name": DATASET_SCHEMA_NAME,
+            "version": DATASET_SCHEMA_VERSION,
+        },
         "format": format if isinstance(format, str) else format.value,
         "dtype": dtype,
         "shape": [n_frames, roi_h, roi_w],
@@ -145,7 +169,7 @@ def build_metadata(
     if format == ExportFormat.tdc_frame_cube:
         meta["valid_tdc_range"] = [1, tdc_max_count]
         meta["collision_policy"] = collision_policy or "first_event"
-        meta["source"] = "generated_from_event_list"
+        meta["source"] = event_generation or "generated_from_event_list"
 
     if format == ExportFormat.event_list:
         meta["event_generation"] = event_generation or ""
@@ -182,6 +206,7 @@ def write_count_cube_bin(
     summary_path = Path(output_path).with_suffix(".summary.json")
 
     np.asarray(counts, dtype=np.uint16).tofile(str(bin_path))
+    metadata = _metadata_with_artifact(metadata, bin_path, role="photon_count_cube")
     meta_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -213,6 +238,7 @@ def write_tdc_frame_cube_bin(
     summary_path = Path(output_path).with_suffix(".summary.json")
 
     np.asarray(tdc_cube, dtype=np.uint16).tofile(str(bin_path))
+    metadata = _metadata_with_artifact(metadata, bin_path, role="tdc_frame_cube")
     meta_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -259,6 +285,7 @@ def write_event_npz(
         event_tof_bins=event_tof_bins,
         event_source=event_source,
     )
+    metadata = _metadata_with_artifact(metadata, npz_path, role="event_list")
     meta_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -298,11 +325,13 @@ def write_bundle_zip(
     with tempfile.TemporaryDirectory(prefix="spad_bundle_") as tmp:
         tmp_root = Path(tmp)
 
-        (tmp_root / "counts.bin").write_bytes(
+        counts_path = tmp_root / "counts.bin"
+        counts_path.write_bytes(
             np.asarray(counts, dtype=np.uint16).tobytes()
         )
+        bundle_metadata = _metadata_with_artifact(metadata, counts_path, role="photon_count_cube")
         (tmp_root / "metadata.json").write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2),
+            json.dumps(bundle_metadata, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         (tmp_root / "summary.json").write_text(
@@ -311,25 +340,51 @@ def write_bundle_zip(
         )
 
         if tdc_cube is not None:
-            (tmp_root / "tdc_frame_cube.bin").write_bytes(
+            tdc_path = tmp_root / "tdc_frame_cube.bin"
+            tdc_path.write_bytes(
                 np.asarray(tdc_cube, dtype=np.uint16).tobytes()
             )
             if tdc_metadata:
+                bundle_tdc_metadata = _metadata_with_artifact(tdc_metadata, tdc_path, role="tdc_frame_cube")
                 (tmp_root / "tdc_frame_cube.metadata.json").write_text(
-                    json.dumps(tdc_metadata, ensure_ascii=False, indent=2),
+                    json.dumps(bundle_tdc_metadata, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
 
         if events is not None:
+            events_path = tmp_root / "events.npz"
             np.savez_compressed(
-                str(tmp_root / "events.npz"),
+                str(events_path),
                 **{k: v for k, v in events.items()},
             )
             if events_metadata:
+                bundle_events_metadata = _metadata_with_artifact(events_metadata, events_path, role="event_list")
                 (tmp_root / "events.metadata.json").write_text(
-                    json.dumps(events_metadata, ensure_ascii=False, indent=2),
+                    json.dumps(bundle_events_metadata, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
+
+        payload_names = ["counts.bin", "tdc_frame_cube.bin", "events.npz"]
+        manifest = {
+            "schema": {
+                "name": DATASET_SCHEMA_NAME,
+                "version": DATASET_SCHEMA_VERSION,
+            },
+            "created_utc": _utc_now_iso(),
+            "artifacts": [
+                _artifact_descriptor(tmp_root / name, role={
+                    "counts.bin": "photon_count_cube",
+                    "tdc_frame_cube.bin": "tdc_frame_cube",
+                    "events.npz": "event_list",
+                }[name])
+                for name in payload_names
+                if (tmp_root / name).exists()
+            ],
+        }
+        (tmp_root / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
             for f in sorted(tmp_root.iterdir()):
@@ -357,7 +412,7 @@ def generate_tdc_frame_cube_from_event_list(
         n_frames: 帧数
         roi_h: ROI 高度
         roi_w: ROI 宽度
-        empty_pixel_value: 空像素填充值 (tdcMaxCount + 2)
+        empty_pixel_value: 空像素填充值。推荐使用 0；有效 TDC bin 从 1 开始。
         collision_policy: 碰撞处理策略 ("first_event" | "min_tof_bin")
 
     Returns:
@@ -385,6 +440,76 @@ def generate_tdc_frame_cube_from_event_list(
                 tdc[f, r, c] = min(existing, new_bin)
     else:
         raise ValueError(f"不支持的 collision_policy: {collision_policy}")
+
+    return tdc
+
+
+def generate_tdc_frame_cube_from_counts(
+    *,
+    counts: np.ndarray,
+    tdc_bin_width_ns: float,
+    tdc_max_count: int,
+    timing_jitter_ns: float,
+    signal_cube: np.ndarray | None,
+    bg_expected_cube: np.ndarray | None,
+    dark_expected_cube: np.ndarray | None,
+    truth_range_series: np.ndarray | None,
+    rng: np.random.Generator,
+    empty_pixel_value: int,
+    fallback_range_m: float | None = None,
+) -> np.ndarray:
+    """直接从 frame-level count cube 生成 tdc_frame_cube。
+
+    用于 event_list 因事件数过大被跳过时，避免 TDC 导出产物缺失。
+    """
+    counts = np.asarray(counts)
+    if counts.ndim != 3:
+        raise ValueError("counts must have shape [n_frames, roi_h, roi_w]")
+
+    n_frames, roi_h, roi_w = counts.shape
+    tdc = np.full((n_frames, roi_h, roi_w), empty_pixel_value, dtype=np.uint16)
+    active = counts > 0
+    if not np.any(active):
+        return tdc
+
+    bin_width_s = tdc_bin_width_ns * 1e-9 if tdc_bin_width_ns > 0 else 0.0
+    if truth_range_series is not None and len(truth_range_series) > 0 and bin_width_s > 0:
+        ranges = np.asarray(truth_range_series, dtype=np.float64).ravel()
+        if ranges.size < n_frames:
+            ranges = np.pad(ranges, (0, n_frames - ranges.size), mode="edge")
+        tof_bins = np.rint((2.0 * ranges[:n_frames] / SPEED_OF_LIGHT_MS) / bin_width_s).astype(np.int64)
+    elif fallback_range_m is not None and fallback_range_m > 0 and bin_width_s > 0:
+        fallback_bin = int(np.rint((2.0 * float(fallback_range_m) / SPEED_OF_LIGHT_MS) / bin_width_s))
+        tof_bins = np.full(n_frames, fallback_bin, dtype=np.int64)
+    else:
+        raise ValueError("signal TDC generation requires truth_range_series or a positive fallback_range_m")
+    tof_bins = np.clip(tof_bins, 1, max(1, int(tdc_max_count)))
+
+    signal_like = active
+    if signal_cube is not None and bg_expected_cube is not None and dark_expected_cube is not None:
+        signal = np.asarray(signal_cube, dtype=np.float64)
+        bg = np.asarray(bg_expected_cube, dtype=np.float64)
+        dark = np.asarray(dark_expected_cube, dtype=np.float64)
+        total = signal + bg + dark
+        frac_signal = np.divide(signal, total, out=np.zeros_like(signal, dtype=np.float64), where=total > 0)
+        signal_like = active & (rng.random(active.shape) < frac_signal)
+
+    noise_like = active & ~signal_like
+    if np.any(noise_like):
+        tdc[noise_like] = rng.integers(1, max(2, int(tdc_max_count) + 1), size=int(np.count_nonzero(noise_like)), dtype=np.uint16)
+
+    for frame_idx in range(n_frames):
+        frame_mask = signal_like[frame_idx]
+        if not np.any(frame_mask):
+            continue
+        base_bin = int(tof_bins[frame_idx])
+        if timing_jitter_ns > 0 and tdc_bin_width_ns > 0:
+            sigma_bins = max(timing_jitter_ns / tdc_bin_width_ns, 0.25)
+            values = np.rint(base_bin + rng.normal(0.0, sigma_bins, size=int(np.count_nonzero(frame_mask)))).astype(np.int64)
+            values = np.clip(values, 1, max(1, int(tdc_max_count))).astype(np.uint16)
+            tdc[frame_idx][frame_mask] = values
+        else:
+            tdc[frame_idx][frame_mask] = np.uint16(base_bin)
 
     return tdc
 

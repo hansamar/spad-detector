@@ -3,6 +3,17 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { ISimulationParams, ISimulationResult } from '../models/simulation-params.model';
 import { am0SolarIrradianceWM2Nm, relativeChannelResponse, spectralBackgroundScale } from './spectral-response.service';
+import { solarEnvironmentBackgroundRateCpsPerPixel } from './physics.service';
+
+function maxMatrixValue(matrix: number[][]): number {
+  let maximum = 0;
+  for (const row of matrix) {
+    for (const value of row) {
+      if (Number.isFinite(value) && value > maximum) maximum = value;
+    }
+  }
+  return maximum;
+}
 
 export function encodeCountsCubeFromDataset(
   dataset: Uint16Array,
@@ -24,7 +35,7 @@ export function encodeCountsCubeFromDataset(
   return `uint16|(${nFrames},${height},${width})|${btoa(binary)}`;
 }
 
-export function diagnosticFrequencyBand(params: Pick<ISimulationParams, 'nFrames' | 'frameDurationUs' | 'rotationSpeed' | 'pathRotationSpeeds1' | 'pathRotationSpeeds2' | 'pathRotationSpeeds3' | 'pathRotationSpeeds4'>): { fmin: number; fmax: number } {
+export function diagnosticFrequencyBand(params: Pick<ISimulationParams, 'nFrames' | 'frameDurationUs' | 'rotationSpeed' | 'rotationKeyframes' | 'rotationKeyframes1' | 'rotationKeyframes2' | 'rotationKeyframes3' | 'rotationKeyframes4' | 'pathRotationSpeeds1' | 'pathRotationSpeeds2' | 'pathRotationSpeeds3' | 'pathRotationSpeeds4'>): { fmin: number; fmax: number } {
   const dtS = Math.max(params.frameDurationUs * 1e-6, 1e-9);
   const sampleRateHz = 1 / dtS;
   const frequencyResolutionHz = sampleRateHz / Math.max(params.nFrames, 1);
@@ -34,6 +45,11 @@ export function diagnosticFrequencyBand(params: Pick<ISimulationParams, 'nFrames
     ...(params.pathRotationSpeeds2 ?? []),
     ...(params.pathRotationSpeeds3 ?? []),
     ...(params.pathRotationSpeeds4 ?? []),
+    ...(params.rotationKeyframes ?? []).map(keyframe => keyframe.rpm),
+    ...(params.rotationKeyframes1 ?? []).map(keyframe => keyframe.rpm),
+    ...(params.rotationKeyframes2 ?? []).map(keyframe => keyframe.rpm),
+    ...(params.rotationKeyframes3 ?? []).map(keyframe => keyframe.rpm),
+    ...(params.rotationKeyframes4 ?? []).map(keyframe => keyframe.rpm),
   ].filter(value => Number.isFinite(value) && value > 0);
   const maxRotorHz = Math.max(0, ...rpmCandidates.map(value => value / 60));
   const fmin = Math.max(0.1, Math.min(0.5, frequencyResolutionHz * 0.5));
@@ -44,12 +60,35 @@ export function diagnosticFrequencyBand(params: Pick<ISimulationParams, 'nFrames
   return { fmin, fmax: Math.max(fmin * 2, fmax) };
 }
 
-export function backendEnvironmentScales(params: Pick<ISimulationParams, 'solarIrradiance' | 'atmosphericVisibilityKm' | 'atmosphericAttenuationEnabled' | 'laserWavelengthNm' | 'filterBandwidth'>): {
+export function backendEnvironmentScales(params: Pick<ISimulationParams,
+  'solarIrradiance'
+  | 'backgroundNoiseMode'
+  | 'atmosphericVisibilityKm'
+  | 'atmosphericAttenuationEnabled'
+  | 'laserWavelengthNm'
+  | 'filterBandwidth'
+  | 'apertureDiameter'
+  | 'systemEfficiency'
+  | 'quantumEfficiency'
+  | 'detectorFov'
+  | 'resolution'
+>): {
   solar_irradiance: number;
   scene_stray_rate: number;
   atmospheric_attenuation_enabled: boolean;
   atmospheric_visibility_km: number;
+  solar_environment_rate: number;
 } {
+  if (params.backgroundNoiseMode === 'manual_sbr') {
+    return {
+      solar_irradiance: params.solarIrradiance,
+      scene_stray_rate: 0,
+      atmospheric_attenuation_enabled: params.atmosphericAttenuationEnabled,
+      atmospheric_visibility_km: Math.max(0.5, params.atmosphericVisibilityKm ?? 23),
+      solar_environment_rate: 0,
+    };
+  }
+
   const visibilityKm = Math.max(0.5, params.atmosphericVisibilityKm ?? 23);
   const hazeScatterScale = 1 + Math.min(3, Math.max(0, 23 / visibilityKm - 1)) * 0.22;
   const wavelengthNm = params.laserWavelengthNm;
@@ -66,6 +105,7 @@ export function backendEnvironmentScales(params: Pick<ISimulationParams, 'solarI
     scene_stray_rate: Math.max(0, sceneStrayRate),
     atmospheric_attenuation_enabled: params.atmosphericAttenuationEnabled,
     atmospheric_visibility_km: visibilityKm,
+    solar_environment_rate: solarEnvironmentBackgroundRateCpsPerPixel(params),
   };
 }
 
@@ -143,6 +183,8 @@ export interface IBackendSimulationSummary {
   target_laser_detected_rate_cps: number;
   target_solar_detected_rate_cps: number;
   truth_freq_hz: number;
+  truth_frequency_series_hz?: number[] | null;
+  truth_propeller_frequency_series_hz?: number[][] | null;
   truth_row: number;
   truth_col: number;
   preview_counts: number[][];
@@ -174,12 +216,41 @@ export function expectedSignalMapFromSummary(
   return map;
 }
 
+export function backendErrorMessage(error: unknown): string {
+  const fallback = error instanceof Error ? error.message : 'Backend simulation failed';
+  const detail = (error as { error?: { detail?: unknown } } | null)?.error?.detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return '';
+        const msg = String((entry as { msg?: unknown }).msg ?? '');
+        if (!msg) return '';
+        const loc = (entry as { loc?: unknown }).loc;
+        if (Array.isArray(loc) && loc.length > 0) {
+          const path = loc.map((part) => String(part)).filter((part) => part !== 'body').join('.');
+          return path ? `${path}: ${msg}` : `request: ${msg}`;
+        }
+        return msg;
+      })
+      .filter(Boolean);
+    if (messages.length > 0) return messages.join('; ');
+  }
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  return fallback;
+}
+
+export function hasLocalDatasetDownload(result: Pick<ISimulationResult, 'dataset'> | null | undefined): boolean {
+  return (result?.dataset?.byteLength ?? 0) > 0;
+}
+
 export interface IBackendSimulationResponse {
   n_frames: number;
   roi_h: number;
   roi_w: number;
   sample_rate_hz: number;
   truth_freq_hz: number;
+  truth_frequency_series_encoded?: string | null;
+  truth_propeller_frequency_series_encoded?: string | null;
   truth_row: number;
   truth_col: number;
   total_signal_photons: number;
@@ -205,6 +276,13 @@ export interface IBackendSimulationJob {
   download_url: string | null;
 }
 
+export interface IBackendJobOptions {
+  persistArtifacts?: boolean;
+  includeEventList?: boolean;
+  includeTdcFrameCube?: boolean;
+  saveTruthSeries?: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class BackendSimulationService {
   private http = inject(HttpClient);
@@ -219,8 +297,8 @@ export class BackendSimulationService {
     return firstValueFrom(this.http.post<IBackendSimulationSummary>(`${this.baseUrl}/simulate/summary`, this.toSummaryRequest(params)));
   }
 
-  startJob(params: ISimulationParams): Promise<IBackendSimulationJob> {
-    return firstValueFrom(this.http.post<IBackendSimulationJob>(`${this.baseUrl}/simulate/jobs`, this.toSummaryRequest(params)));
+  startJob(params: ISimulationParams, options: IBackendJobOptions = {}): Promise<IBackendSimulationJob> {
+    return firstValueFrom(this.http.post<IBackendSimulationJob>(`${this.baseUrl}/simulate/jobs`, this.toSummaryRequest(params, options)));
   }
 
   getJob(jobId: string): Promise<IBackendSimulationJob> {
@@ -235,10 +313,7 @@ export class BackendSimulationService {
   summaryToSimulationResult(summary: IBackendSimulationSummary, params: ISimulationParams): ISimulationResult {
     const height = summary.roi_h;
     const width = summary.roi_w;
-    const totalPixels = width * height;
-    const emptyPixelValue = params.tdcMaxCount + 2;
-    const dataset = new Uint16Array(summary.n_frames * totalPixels);
-    dataset.fill(emptyPixelValue);
+    const dataset = new Uint16Array(0);
 
     const photonCountMap = Array.from({ length: height }, (_, row) =>
       Array.from({ length: width }, (_, col) => Math.max(0, Math.round(summary.preview_counts[row]?.[col] ?? 0))),
@@ -246,6 +321,15 @@ export class BackendSimulationService {
     const detectedPhotons = photonCountMap.flat().reduce((sum, value) => sum + value, 0);
     const groundTruthMap = expectedSignalMapFromSummary(summary);
     const incidentPhotonMap = groundTruthMap.map(row => [...row]);
+    const frequencies = this.truthFrequencySeries(summary.n_frames, summary.truth_freq_hz, summary.truth_frequency_series_hz);
+    const propellerFrequencies = this.truthPropellerFrequencySeries(summary.n_frames, summary.truth_propeller_frequency_series_hz);
+    const previewLength = Math.max(frequencies.length, propellerFrequencies?.length ?? 0, 1);
+    const frameSpan = Math.max(summary.n_frames - 1, 0);
+    const times = Array.from({ length: previewLength }, (_, index) => (
+      previewLength <= 1
+        ? 0
+        : (index * frameSpan / (previewLength - 1)) / Math.max(summary.sample_rate_hz, 1e-9)
+    ));
 
     return {
       dataset,
@@ -254,14 +338,15 @@ export class BackendSimulationService {
       signalCoordinates: [],
       incidentPhotons: summary.total_signal_photons,
       incidentPhotonMap,
-      maxIncidentPhotonsPerPixel: Math.max(...incidentPhotonMap.flat(), 0),
+      maxIncidentPhotonsPerPixel: maxMatrixValue(incidentPhotonMap),
       photonCountMap,
       groundTruthMap,
       resolution: { width, height },
       groundTruthData: {
-        times: Array.from({ length: summary.n_frames }, (_, index) => index / Math.max(summary.sample_rate_hz, 1e-9)),
-        frequencies: Array(summary.n_frames).fill(summary.truth_freq_hz),
-        phases: Array(summary.n_frames).fill(0),
+        times,
+        frequencies,
+        propellerFrequencies,
+        phases: Array(previewLength).fill(0),
       },
     };
   }
@@ -272,7 +357,7 @@ export class BackendSimulationService {
     const height = response.roi_h;
     const width = response.roi_w;
     const totalPixels = width * height;
-    const emptyPixelValue = params.tdcMaxCount + 2;
+    const emptyPixelValue = 0;
     const dataset = new Uint16Array(nFrames * totalPixels);
     dataset.fill(emptyPixelValue);
 
@@ -298,16 +383,54 @@ export class BackendSimulationService {
       signalCoordinates: [],
       incidentPhotons: response.total_signal_photons,
       incidentPhotonMap: groundTruthMap,
-      maxIncidentPhotonsPerPixel: Math.max(...groundTruthMap.flat(), 0),
+      maxIncidentPhotonsPerPixel: maxMatrixValue(groundTruthMap),
       photonCountMap,
       groundTruthMap,
       resolution: { width, height },
       groundTruthData: {
         times: Array.from({ length: nFrames }, (_, index) => index / Math.max(response.sample_rate_hz, 1e-9)),
-        frequencies: Array(nFrames).fill(response.truth_freq_hz),
+        frequencies: this.truthFrequencySeries(
+          nFrames,
+          response.truth_freq_hz,
+          response.truth_frequency_series_encoded ? this.decodeNumericArray(response.truth_frequency_series_encoded) : null,
+        ),
+        propellerFrequencies: this.truthPropellerFrequencySeries(
+          nFrames,
+          response.truth_propeller_frequency_series_encoded
+            ? this.decodeNumericArray(response.truth_propeller_frequency_series_encoded)
+            : null,
+        ),
         phases: Array(nFrames).fill(0),
       },
     };
+  }
+
+  private truthFrequencySeries(nFrames: number, fallbackHz: number, series?: number[] | null): number[] {
+    if (Array.isArray(series) && series.length > 0) {
+      return series.map(value => Number.isFinite(value) ? Math.max(0, value) : Math.max(0, fallbackHz));
+    }
+    const previewLength = Math.min(nFrames, 2_000);
+    return Array(previewLength).fill(Math.max(0, fallbackHz));
+  }
+
+  private truthPropellerFrequencySeries(nFrames: number, series?: number[][] | number[] | null): number[][] | undefined {
+    if (!Array.isArray(series)) return undefined;
+    if (series.length > 0 && Array.isArray(series[0])) {
+      const rows = series as number[][];
+      if (rows.every(row => Array.isArray(row) && row.length === 4)) {
+        return rows.map(row => row.map(value => Number.isFinite(value) ? Math.max(0, value) : 0));
+      }
+    }
+    if (series.length === nFrames * 4 && !Array.isArray(series[0])) {
+      const flat = series as number[];
+      return Array.from({ length: nFrames }, (_, frame) =>
+        Array.from({ length: 4 }, (_, prop) => {
+          const value = flat[frame * 4 + prop];
+          return Number.isFinite(value) ? Math.max(0, value) : 0;
+        }),
+      );
+    }
+    return undefined;
   }
 
   private backendTruthMap(response: IBackendSimulationResponse, height: number, width: number, params: ISimulationParams): number[][] {
@@ -503,7 +626,7 @@ export class BackendSimulationService {
     return desktopUrl || 'http://127.0.0.1:8000/api';
   }
 
-  private toSummaryRequest(params: ISimulationParams): Record<string, unknown> {
+  private toSummaryRequest(params: ISimulationParams, options: IBackendJobOptions = {}): Record<string, unknown> {
     const dtS = Math.max(params.frameDurationUs * 1e-6, 1e-9);
     const observationTimeS = Math.max(params.nFrames * dtS, dtS);
     const detectorPosition = { x: 0, y: params.cameraHeight, z: 0 };
@@ -577,7 +700,7 @@ export class BackendSimulationService {
       simulation_tier: 'physics_informed',
       output_mode: 'frame',
       lightcurve_mode: 'attitude_driven',
-      save_truth_series: true,
+      save_truth_series: options.saveTruthSeries ?? false,
       target_range_m: targetRangeM,
       target_area_m2: targetAreaM2,
       target_length_m: params.targetType === 'Drone'
@@ -599,6 +722,8 @@ export class BackendSimulationService {
       target_reflectivity: params.reflectivity,
       propeller_reflectivity: params.propellerReflectivity ?? params.reflectivity,
       solar_irradiance: environmentScales.solar_irradiance,
+      background_noise_mode: params.backgroundNoiseMode,
+      manual_signal_background_ratio: params.manualSignalBackgroundRatio,
       illumination_mode: 'laser_plus_solar',
       laser_mode: params.laserMode.toLowerCase(),
       laser_average_power_w: params.laserAveragePower,
@@ -648,7 +773,7 @@ export class BackendSimulationService {
       detector_fov_urad: Math.max(1, params.detectorFov * Math.PI / 180 * 1e6),
       atmospheric_attenuation_enabled: environmentScales.atmospheric_attenuation_enabled,
       atmospheric_visibility_km: environmentScales.atmospheric_visibility_km,
-      scene_stray_rate: environmentScales.scene_stray_rate,
+      scene_stray_rate: params.backgroundNoiseMode === 'manual_sbr' ? 0 : environmentScales.scene_stray_rate,
       dark_count_rate: params.darkCountRate,
       dead_time_ns: params.deadTimeNs ?? 0,
       timing_jitter_ns: params.timingJitterNs ?? 0,
@@ -662,8 +787,9 @@ export class BackendSimulationService {
       fill_factor: params.fillFactor,
       microlens_gain: params.microlensGain,
       // Event/TDC 导出控制：始终请求完整数据，由后端根据 max_event_count 守卫决定是否实际生成
-      include_event_list: true,
-      include_tdc_frame_cube: true,
+      persist_artifacts: options.persistArtifacts ?? false,
+      include_event_list: options.includeEventList ?? false,
+      include_tdc_frame_cube: options.includeTdcFrameCube ?? false,
       max_event_count: 10_000_000,
     };
   }

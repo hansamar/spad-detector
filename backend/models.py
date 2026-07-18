@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 SimulationTier = Literal["baseline_empirical", "physics_informed"]
@@ -13,15 +13,18 @@ DetectorPreset = Literal["custom", "pf32"]
 ComputeBackend = Literal["auto", "cpu", "cuda"]
 IlluminationMode = Literal["laser", "solar", "laser_plus_solar"]
 LaserMode = Literal["pulsed", "cw"]
+BackgroundNoiseMode = Literal["solar_environment", "manual_sbr"]
 
 MAX_BACKEND_FRAMES = 200_000
 MAX_BACKEND_ROI_PIXELS = 16_384
-MAX_BACKEND_SAMPLES = 204_800_000
-MAX_BACKEND_TRAJECTORY_POINTS = 50_000
+MAX_BACKEND_SAMPLES = 50_000_000
+MAX_BACKEND_TRAJECTORY_POINTS = MAX_BACKEND_FRAMES
 
 
 class SimulateRequest(BaseModel):
     """Simulation request parameters."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     scenario: str | None = None
     detector_preset: DetectorPreset | None = None
@@ -89,6 +92,8 @@ class SimulateRequest(BaseModel):
     detector_pitch_deg: float | None = None
 
     scene_stray_rate: float | None = Field(default=None, ge=0)
+    background_noise_mode: BackgroundNoiseMode | None = None
+    manual_signal_background_ratio: float | None = Field(default=None, gt=0)
 
     illumination_mode: IlluminationMode | None = None
     laser_mode: LaserMode | None = None
@@ -109,7 +114,7 @@ class SimulateRequest(BaseModel):
 
     dark_count_rate: float | None = Field(default=None, ge=0)
     dead_time_ns: float | None = Field(default=None, ge=0)
-    max_count_per_frame: int | None = Field(default=None, ge=0)
+    max_count_per_frame: int | None = Field(default=None, ge=0, le=65535)
     timing_jitter_ns: float | None = Field(default=None, ge=0)
     tdc_bin_width_ns: float | None = Field(default=None, ge=0)
     irf_fwhm_ps: float | None = Field(default=None, ge=0)
@@ -127,6 +132,7 @@ class SimulateRequest(BaseModel):
     jitter_sigma_pixels: float | None = Field(default=None, ge=0)
 
     # Export control
+    persist_artifacts: bool | None = None
     include_event_list: bool | None = None
     include_tdc_frame_cube: bool | None = None
     max_event_count: int | None = Field(default=None, ge=0)
@@ -236,6 +242,8 @@ class SimulateResponse(BaseModel):
 
     snr_db: float
     truth_freq_hz: float
+    truth_frequency_series_encoded: str | None = None
+    truth_propeller_frequency_series_encoded: str | None = None
     truth_pixel: int
     truth_row: int
     truth_col: int
@@ -316,6 +324,8 @@ class SimulateSummaryResponse(BaseModel):
     target_laser_detected_rate_cps: float
     target_solar_detected_rate_cps: float
     truth_freq_hz: float
+    truth_frequency_series_hz: list[float] | None = None
+    truth_propeller_frequency_series_hz: list[list[float]] | None = None
     truth_row: int
     truth_col: int
     preview_counts: list[list[int]] = Field(default_factory=list)

@@ -33,6 +33,56 @@ def aperture_area(diameter_m: float) -> float:
     return np.pi * (diameter_m / 2.0) ** 2
 
 
+def haze_scatter_scale_from_visibility(visibility_km: float = 23.0) -> float:
+    """Return a mild ambient-scatter multiplier from visibility."""
+    safe_visibility = max(float(visibility_km), 0.5)
+    return float(1.0 + min(3.0, max(0.0, 23.0 / safe_visibility - 1.0)) * 0.22)
+
+
+def solar_environment_detected_rate_cps_per_pixel(
+    irradiance_w_m2_nm: float,
+    filter_bandwidth_nm: float,
+    wavelength_nm: float,
+    aperture_diameter_m: float,
+    receiver_efficiency: float,
+    quantum_efficiency: float,
+    pixel_ifov_urad: float,
+    stray_light_rejection_ratio: float,
+    visibility_km: float = 23.0,
+    ambient_reflectance: float = 0.18,
+) -> float:
+    """Solar-driven scene/airlight background entering one detector pixel.
+
+    The model treats the non-target environment inside the pixel IFOV as a
+    Lambertian ambient radiance term. Optical baffling and filtering losses are
+    represented by the stray-light rejection ratio before photon detection.
+    """
+    solar_irradiance = max(float(irradiance_w_m2_nm), 0.0)
+    bandwidth = max(float(filter_bandwidth_nm), 0.0)
+    if solar_irradiance == 0.0 or bandwidth == 0.0:
+        return 0.0
+
+    pixel_ifov_rad = max(float(pixel_ifov_urad), 0.0) * 1e-6
+    pixel_solid_angle_sr = pixel_ifov_rad * pixel_ifov_rad
+    radiance_w_m2_sr_nm = max(float(ambient_reflectance), 0.0) * solar_irradiance / np.pi
+    rejection = max(float(stray_light_rejection_ratio), 1.0)
+    optical_power_w = (
+        radiance_w_m2_sr_nm
+        * bandwidth
+        * aperture_area(aperture_diameter_m)
+        * pixel_solid_angle_sr
+        * haze_scatter_scale_from_visibility(visibility_km)
+        / rejection
+    )
+    detected_rate = (
+        optical_power_w
+        / max(photon_energy_joule(wavelength_nm), 1e-30)
+        * max(float(receiver_efficiency), 0.0)
+        * max(float(quantum_efficiency), 0.0)
+    )
+    return max(float(detected_rate), 0.0)
+
+
 def make_outage_mask(n_frames: int, outage_fraction: float, seed: int = 123):
     """生成随机的信号中断/遮挡掩码"""
     if outage_fraction <= 0:

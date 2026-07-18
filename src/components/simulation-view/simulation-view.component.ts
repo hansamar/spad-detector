@@ -4,22 +4,23 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ISimulationParams, ISimulationResult, IWaypoint, IRotationKeyframe, IRecordedDroneSample } from '../../models/simulation-params.model';
 import { DJI_DRONE_PRESETS, IDronePreset, findDronePreset } from '../../models/drone-presets.model';
-import { ENVIRONMENT_PRESETS, findEnvironmentPreset } from '../../models/environment-presets.model';
 import { DETECTOR_PRESETS, getDetectorPreset, resolveDetectorSettings } from '../../services/detector-preset.service';
 import { estimateSimulationBudget, recommendedFrameCount } from '../../services/simulation-budget.service';
-import { BackendSimulationService, IBackendCapabilities, IBackendSimulationJob, IBackendSimulationSummary } from '../../services/backend-simulation.service';
+import { BackendSimulationService, IBackendCapabilities, IBackendSimulationJob, IBackendSimulationSummary, backendErrorMessage, hasLocalDatasetDownload } from '../../services/backend-simulation.service';
 import { PhysicsService } from '../../services/physics.service';
 import { CommonModule } from '@angular/common';
 import { LocalizationService } from '../../services/localization.service';
+import { SimulationResultsComponent } from '../simulation-results/simulation-results.component';
 
 const SCENE_LAYER = 0;
 const RIG_LAYER = 1;
+type WorkspaceStep = 'scene' | 'optics' | 'detector' | 'sampling';
 
 @Component({
   selector: 'app-simulation-view',
   standalone: true,
   templateUrl: './simulation-view.component.html',
-  imports: [CommonModule],
+  imports: [CommonModule, SimulationResultsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class SimulationViewComponent implements AfterViewInit, OnDestroy {
@@ -32,15 +33,6 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   @ViewChild('detectorViewport', { static: true })
   private detectorViewport!: ElementRef<HTMLElement>;
 
-  @ViewChild('photonCountingCanvas')
-  private photonCountingCanvas?: ElementRef<HTMLCanvasElement>;
-
-  @ViewChild('groundTruthCanvas')
-  private groundTruthCanvas?: ElementRef<HTMLCanvasElement>;
-
-  @ViewChild('incidentPhotonsCanvas')
-  private incidentPhotonsCanvas?: ElementRef<HTMLCanvasElement>;
-
   @ViewChild('fileInput')
   private fileInput?: ElementRef<HTMLInputElement>;
 
@@ -51,11 +43,13 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   l = inject(LocalizationService); // Public for template access
   private backendJobParams = new Map<string, ISimulationParams>();
   private activeBackendJobId: string | null = null;
+  private backendPollTimer: number | null = null;
+  private pendingBackendDownloadFormat: string | null = null;
+  private activeBackendArtifactScope: 'all' | string | null = null;
+  private completedBackendArtifactScope: 'all' | string | null = null;
 
   // --- UI State ---
-  isSimulating = signal(false);
   isPreviewing = signal(false);
-  simulationProgress = signal(0);
   simulationResult = signal<ISimulationResult | null>(null);
   backendSummary = signal<IBackendSimulationSummary | null>(null);
   backendJob = signal<IBackendSimulationJob | null>(null);
@@ -63,23 +57,17 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   backendError = signal('');
   isBackendSimulating = signal(false);
   showResultsModal = signal(false);
-  isPanelOpen = signal(false);
+  activeWorkspaceStep = signal<WorkspaceStep>('scene');
   uploadedImage = signal<HTMLImageElement | null>(null);
   uploadedImageUrl = signal<string | null>(null);
   binarizedImageUrl = signal<string | null>(null);
   activeKeyframeTab = signal(1);
 
   // Resizable Panel State
-  panelWidth = signal(320); // Default width in px
+  panelWidth = signal(408);
   private isResizing = false;
   private startX = 0;
   private startWidth = 0;
-
-  // Accordion state
-  targetSettingsOpen = signal(true);
-  detectorSettingsOpen = signal(false);
-  envSettingsOpen = signal(false);
-  simSettingsOpen = signal(false);
 
   // --- Simulation Parameters ---
   // Target
@@ -169,11 +157,10 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   tdcMaxCount = signal((2 ** 13) - 1);
 
   // Environment & Laser
-  readonly environmentPresets = ENVIRONMENT_PRESETS;
-  selectedEnvironmentPresetId = signal('lab_dim');
-  selectedEnvironmentPreset = computed(() => findEnvironmentPreset(this.selectedEnvironmentPresetId()));
   laserMode = signal<'Pulsed' | 'CW'>('Pulsed');
-  solarIrradiance = signal(0.000068);
+  solarIrradiance = signal(1.35);
+  backgroundNoiseMode = signal<'solar_environment' | 'manual_sbr'>('solar_environment');
+  manualSignalBackgroundRatio = signal(10);
   atmosphericAttenuationEnabled = signal(true);
   atmosphericVisibilityKm = signal(50);
   laserWavelengthNm = signal(780);
@@ -239,22 +226,6 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     return (c * maxTofSeconds) / 2;
   });
 
-  // --- Pile-up Analysis ---
-  pileUpFactor = computed(() => {
-    const result = this.simulationResult();
-    return result ? result.maxIncidentPhotonsPerPixel : 0;
-  });
-
-  pileUpStatus = computed(() => {
-    const factor = this.pileUpFactor();
-    if (factor > 0.95) {
-      return { textKey: 'pileupHigh', class: 'text-red-400' };
-    }
-    if (factor > 0.05) {
-      return { textKey: 'pileupModerate', class: 'text-yellow-400' };
-    }
-    return { textKey: 'pileupLow', class: 'text-green-400' };
-  });
   simulationBudget = computed(() => estimateSimulationBudget(
     { width: this.resolutionW(), height: this.resolutionH() },
     this.nFrames(),
@@ -292,7 +263,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     return samples.length > 0 ? samples[samples.length - 1].time : 0;
   });
 
-  // Combine all params into a computed signal for the simulation service
+  // Assemble the validated frontend state sent to the authoritative Python backend.
   simulationParams = computed<ISimulationParams>(() => {
     const isManualDrone = this.isManualDroneMode();
     const recordedTrajectory = this.manualDroneRecordedSamples();
@@ -379,8 +350,9 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     maxCountRateCpsPerPixel: this.maxCountRateCpsPerPixel(),
     timeResolutionPs: this.timeResolutionPs(),
     tdcMaxCount: this.tdcMaxCount(),
-    environmentPresetId: this.selectedEnvironmentPresetId(),
     solarIrradiance: this.solarIrradiance(),
+    backgroundNoiseMode: this.backgroundNoiseMode(),
+    manualSignalBackgroundRatio: this.manualSignalBackgroundRatio(),
     atmosphericAttenuationEnabled: this.atmosphericAttenuationEnabled(),
     atmosphericVisibilityKm: this.atmosphericVisibilityKm(),
     laserMode: this.laserMode(),
@@ -445,7 +417,6 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       this.solarIrradiance();
       this.atmosphericVisibilityKm();
-      this.selectedEnvironmentPresetId();
       this.updateSolarVisuals();
     });
 
@@ -473,14 +444,13 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const resolved = this.resolvedDetectorSettings();
       if (!resolved) return;
-      const environment = this.selectedEnvironmentPreset();
       this.resolutionW.set(resolved.resolution.width);
       this.resolutionH.set(resolved.resolution.height);
       this.pixelPitchUm.set(resolved.preset.pixelPitchUm);
       this.fillFactor.set(resolved.preset.fillFactor);
       this.microlensGain.set(resolved.preset.microlensGain);
       this.quantumEfficiency.set(Number(resolved.quantumEfficiency.toFixed(4)));
-      this.solarIrradiance.set(Number((resolved.solarIrradiance * environment.solarScale).toFixed(6)));
+      this.solarIrradiance.set(Number(resolved.solarIrradiance.toFixed(6)));
       this.systemEfficiency.set(Number(resolved.systemEfficiency.toFixed(4)));
       this.darkCountRate.set(resolved.darkCountRateCps);
       this.deadTimeNs.set(resolved.deadTimeNs);
@@ -505,11 +475,6 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
       if (this.drone) {
         this.rebuildDroneModel();
       }
-    });
-
-    effect(() => {
-      const environment = this.selectedEnvironmentPreset();
-      this.atmosphericVisibilityKm.set(environment.visibilityKm);
     });
 
     effect(() => {
@@ -676,14 +641,27 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     if (this.frameId != null) {
       cancelAnimationFrame(this.frameId);
     }
-    this.resizeObserver.disconnect();
+    this.resizeObserver?.disconnect();
+    if (this.backendPollTimer !== null) {
+      window.clearTimeout(this.backendPollTimer);
+      this.backendPollTimer = null;
+    }
+    this.stopResize();
+    this.controls?.dispose();
+    this.disposeSceneResources();
     if (this.renderer) {
+      this.renderer.renderLists.dispose();
       this.renderer.dispose();
+      this.renderer.forceContextLoss();
     }
     this.removeManualDroneControls();
   }
 
   // --- Resizable Panel Logic ---
+  setWorkspaceStep(step: WorkspaceStep): void {
+    this.activeWorkspaceStep.set(step);
+  }
+
   startResize(event: MouseEvent) {
     event.preventDefault(); // Prevent text selection
     this.isResizing = true;
@@ -697,8 +675,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   private onMouseMove = (event: MouseEvent) => {
     if (!this.isResizing) return;
     const dx = event.clientX - this.startX;
-    // Limits: Min 250px, Max 600px
-    const newWidth = Math.max(250, Math.min(600, this.startWidth + dx));
+    const newWidth = Math.max(360, Math.min(560, this.startWidth - dx));
     this.panelWidth.set(newWidth);
   }
 
@@ -1041,7 +1018,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
   }
 
   private shouldCaptureDroneInput(): boolean {
-    return this.isManualDroneMode() && !this.isSimulating() && !this.isBackendSimulating();
+    return this.isManualDroneMode() && !this.isBackendSimulating();
   }
 
   private handleKeyDown = (event: KeyboardEvent) => {
@@ -1089,6 +1066,11 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     const speed = this.manualDroneSpeed() * boost;
     const yawRate = 75;
     const yawInput = (this.pressedKeys.has('KeyQ') ? 1 : 0) - (this.pressedKeys.has('KeyE') ? 1 : 0);
+    const hasTranslationInput = ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyR', 'KeyF']
+      .some(code => this.pressedKeys.has(code));
+    if (!hasTranslationInput && yawInput === 0 && !this.isDroneMouseLook && !this.manualDroneRecording()) {
+      return;
+    }
     if (yawInput !== 0) {
       this.manualDroneYaw.update(yaw => yaw + yawInput * yawRate * deltaSeconds);
     }
@@ -1352,7 +1334,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
       .then(capabilities => this.backendCapabilities.set(capabilities))
       .catch(error => {
         this.backendCapabilities.set(null);
-        this.backendError.set(error?.message || 'Backend unavailable');
+        this.backendError.set(backendErrorMessage(error));
       });
   }
 
@@ -1370,9 +1352,16 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     this.backendSummary.set(null);
     this.backendJob.set(null);
     this.backendError.set('');
+    this.pendingBackendDownloadFormat = null;
+    this.activeBackendArtifactScope = null;
+    this.completedBackendArtifactScope = null;
 
     const paramsSnapshot = this.simulationParams();
-    this.backendSimulationService.startJob(paramsSnapshot)
+    this.backendSimulationService.startJob(paramsSnapshot, {
+      persistArtifacts: false,
+      includeEventList: false,
+      includeTdcFrameCube: false,
+    })
       .then(job => {
         this.activeBackendJobId = job.job_id;
         this.backendJobParams.set(job.job_id, paramsSnapshot);
@@ -1380,7 +1369,8 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
         this.pollBackendJob(job.job_id);
       })
       .catch(error => {
-        this.backendError.set(error?.message || 'Backend simulation failed');
+        this.activeBackendArtifactScope = null;
+        this.backendError.set(backendErrorMessage(error));
         this.isBackendSimulating.set(false);
       });
   }
@@ -1393,6 +1383,9 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
         }
         this.backendJob.set(job);
         if (job.status === 'completed') {
+          this.backendJobParams.delete(jobId);
+          this.activeBackendJobId = null;
+          this.backendPollTimer = null;
           this.backendSummary.set(job.summary);
           const paramsSnapshot = this.backendJobParams.get(jobId) ?? this.simulationParams();
           if (job.result) {
@@ -1403,45 +1396,61 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
             this.simulationResult.set(result);
           }
           this.isBackendSimulating.set(false);
+          if (job.download_url && this.activeBackendArtifactScope) {
+            this.completedBackendArtifactScope = this.activeBackendArtifactScope;
+          }
+          const pendingFormat = this.pendingBackendDownloadFormat;
+          if (pendingFormat) {
+            this.pendingBackendDownloadFormat = null;
+            if (job.download_url) {
+              this.triggerBackendDownload(this.backendSimulationService.downloadUrl(job.download_url), pendingFormat);
+            } else {
+              this.backendError.set('Backend export completed without a downloadable artifact');
+            }
+          }
           this.showResultsModal.set(true);
-          setTimeout(() => this.drawResultImages(), 0);
           return;
         }
         if (job.status === 'failed') {
+          this.backendJobParams.delete(jobId);
+          this.activeBackendJobId = null;
+          this.backendPollTimer = null;
+          this.pendingBackendDownloadFormat = null;
+          this.activeBackendArtifactScope = null;
           this.backendError.set(job.error || 'Backend simulation failed');
           this.isBackendSimulating.set(false);
           return;
         }
-        window.setTimeout(() => this.pollBackendJob(jobId), 600);
+        this.backendPollTimer = window.setTimeout(() => this.pollBackendJob(jobId), 600);
       })
       .catch(error => {
-        this.backendError.set(error?.message || 'Backend simulation polling failed');
+        this.backendJobParams.delete(jobId);
+        this.activeBackendJobId = null;
+        this.backendPollTimer = null;
+        this.activeBackendArtifactScope = null;
+        this.backendError.set(backendErrorMessage(error));
         this.isBackendSimulating.set(false);
       });
   }
 
   downloadData() {
     const backendUrl = this.backendDownloadUrl();
-    if (backendUrl) {
-      const format = this.selectedExportFormat();
-      const url = `${backendUrl}?format=${format}`;
-      const a = document.createElement('a');
-      a.href = url;
-      const filenames: Record<string, string> = {
-        count_cube: 'spad_counts.bin',
-        tdc_frame_cube: 'spad_tdc_cube.bin',
-        event_list: 'spad_events.npz',
-        bundle: 'spad_bundle.zip',
-      };
-      a.download = filenames[format] || 'spad_simulation.bin';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+    const format = this.selectedExportFormat();
+    if (
+      backendUrl
+      && (this.completedBackendArtifactScope === 'all' || this.completedBackendArtifactScope === format)
+    ) {
+      this.triggerBackendDownload(backendUrl, format);
       return;
     }
 
     const result = this.simulationResult();
-    if (!result?.dataset) return;
+    if (!hasLocalDatasetDownload(result)) {
+      if (result || this.backendSummary()) {
+        this.startBackendExport(format);
+      }
+      return;
+    }
 
     // Helper function for downloading
     const downloadFile = (blob: Blob, filename: string) => {
@@ -1459,6 +1468,47 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     dataBytes.set(new Uint8Array(result.dataset.buffer, result.dataset.byteOffset, result.dataset.byteLength));
     const dataBlob = new Blob([dataBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
     downloadFile(dataBlob, 'spad_simulation_data.bin');
+  }
+
+  private startBackendExport(format: string): void {
+    const paramsSnapshot = this.simulationParams();
+    this.pendingBackendDownloadFormat = format;
+    this.activeBackendArtifactScope = format;
+    this.isBackendSimulating.set(true);
+    this.backendError.set('');
+    this.backendSimulationService.startJob(paramsSnapshot, {
+      persistArtifacts: true,
+      includeEventList: format === 'event_list' || format === 'tdc_frame_cube' || format === 'bundle',
+      includeTdcFrameCube: format === 'tdc_frame_cube' || format === 'bundle',
+    })
+      .then(job => {
+        this.activeBackendJobId = job.job_id;
+        this.backendJobParams.set(job.job_id, paramsSnapshot);
+        this.backendJob.set(job);
+        this.pollBackendJob(job.job_id);
+      })
+      .catch(error => {
+        this.pendingBackendDownloadFormat = null;
+        this.activeBackendArtifactScope = null;
+        this.backendError.set(backendErrorMessage(error));
+        this.isBackendSimulating.set(false);
+      });
+  }
+
+  private triggerBackendDownload(backendUrl: string, format: string): void {
+    const url = `${backendUrl}?format=${format}`;
+    const a = document.createElement('a');
+    a.href = url;
+    const filenames: Record<string, string> = {
+      count_cube: 'spad_counts.bin',
+      tdc_frame_cube: 'spad_tdc_cube.bin',
+      event_list: 'spad_events.npz',
+      bundle: 'spad_bundle.zip',
+    };
+    a.download = filenames[format] || 'spad_simulation.bin';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   private clearTrajectoryLine() {
@@ -1786,9 +1836,8 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     const irradiance = Math.max(0, this.solarIrradiance());
     const response = irradiance / (irradiance + 0.18);
     const compressed = Math.pow(response, 0.62);
-    const environment = this.selectedEnvironmentPreset();
     const visibilityKm = Math.max(0.5, this.atmosphericVisibilityKm());
-    const haze = Math.max(environment.horizonHaze, Math.min(0.9, (23 / visibilityKm - 1) * 0.22));
+    const haze = Math.max(0.02, Math.min(0.9, (23 / visibilityKm - 1) * 0.22));
     const sunPosition = new THREE.Vector3(-6, 3.8, -24);
 
     this.sun.position.copy(sunPosition);
@@ -1840,7 +1889,7 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.rendererCanvas.nativeElement, antialias: true });
     this.renderer.setSize(clientWidth, clientHeight);
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.86;
@@ -1900,8 +1949,8 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     this.scene.add(this.detectorRig);
 
     this.detectorCamera = new THREE.PerspectiveCamera(this.detectorFov(), 1.0, 0.1, 10000);
-    this.detectorCamera.layers.set(SCENE_LAYER); // Detector camera only sees the scene layer
-    this.detectorCamera.layers.enable(RIG_LAYER);
+    // 探测器只观察场景，避免相机位于设备内部时被镜筒、窗口和激光可视化遮挡。
+    this.detectorCamera.layers.set(SCENE_LAYER);
     this.scene.add(this.detectorCamera); // Add to scene, not rig
 
     const detectorGeo = new THREE.BoxGeometry(0.22, 0.18, 0.08);
@@ -2078,7 +2127,8 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
         const elapsedTimeSeconds = (performance.now() - this.animationStartTime) / 1000;
 
         if (elapsedTimeSeconds >= totalDuration) {
-          this.isPreviewing.set(false);
+          this.finishTrajectoryPreview();
+          return;
         }
         const progress = totalDuration > 0 ? elapsedTimeSeconds / totalDuration : 1;
         const currentIndex = Math.min(this.simulationTrajectory.length - 1, Math.floor(progress * this.simulationTrajectory.length));
@@ -2193,121 +2243,24 @@ export class SimulationViewComponent implements AfterViewInit, OnDestroy {
     render();
   }
 
-  private drawResultImages(): void {
-    const result = this.simulationResult();
-    const pcCanvas = this.photonCountingCanvas?.nativeElement;
-    const gtCanvas = this.groundTruthCanvas?.nativeElement;
-    const ipCanvas = this.incidentPhotonsCanvas?.nativeElement;
-
-    if (!result || !pcCanvas || !gtCanvas || !ipCanvas) {
-      return;
-    }
-
-    const { tdcMaxCount } = this.simulationParams();
-    const { width, height } = result.resolution ?? this.simulationParams().resolution;
-    const totalPixels = width * height;
-
-    const photonCounts: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
-    if (result.photonCountMap) {
-      for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-          photonCounts[row][col] = result.photonCountMap[row]?.[col] ?? 0;
-        }
-      }
-    } else {
-      const emptyPixelValue = tdcMaxCount + 2;
-      for (let i = 0; i < result.dataset.length; i++) {
-        if (result.dataset[i] < emptyPixelValue) {
-          const pixelIndexInFrame = i % totalPixels;
-          const row = Math.floor(pixelIndexInFrame / width);
-          const col = pixelIndexInFrame % width;
-          photonCounts[row][col]++;
-        }
-      }
-    }
-
-    const groundTruthCounts: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
-    if (result.groundTruthMap) {
-      for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-          groundTruthCounts[row][col] = result.groundTruthMap[row]?.[col] ?? 0;
-        }
-      }
-    } else {
-      for (const coord of result.signalCoordinates) {
-        groundTruthCounts[coord.row][coord.col]++;
-      }
-    }
-
-    this.drawHeatmap(pcCanvas, photonCounts, 'occupancy');
-    this.drawHeatmap(gtCanvas, groundTruthCounts, 'intensity');
-    this.drawHeatmap(ipCanvas, result.incidentPhotonMap, 'intensity');
+  private finishTrajectoryPreview(): void {
+    this.isPreviewing.set(false);
+    this.clearTrajectoryLine();
   }
 
-  private jet(value: number): [number, number, number] {
-    const stops: Array<[number, number, number]> = [
-      [8, 14, 70],
-      [18, 70, 150],
-      [25, 150, 190],
-      [92, 205, 150],
-      [245, 220, 92],
-    ];
-    const scaled = Math.min(1, Math.max(0, value)) * (stops.length - 1);
-    const index = Math.min(stops.length - 2, Math.floor(scaled));
-    const t = scaled - index;
-    const a = stops[index];
-    const b = stops[index + 1];
-    return [
-      a[0] + (b[0] - a[0]) * t,
-      a[1] + (b[1] - a[1]) * t,
-      a[2] + (b[2] - a[2]) * t,
-    ];
-  }
-
-  private drawHeatmap(canvas: HTMLCanvasElement, data: number[][], mode: 'occupancy' | 'intensity' = 'intensity') {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const height = data.length;
-    if (height === 0) return;
-    const width = data[0].length;
-
-    canvas.width = width;
-    canvas.height = height;
-
-    const positiveValues: number[] = [];
-    for (let r = 0; r < height; r++) {
-      for (let c = 0; c < width; c++) {
-        if (data[r][c] > 0) {
-          positiveValues.push(data[r][c]);
+  private disposeSceneResources(): void {
+    if (!this.scene) return;
+    this.scene.traverse(object => {
+      const mesh = object as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      for (const material of materials) {
+        for (const value of Object.values(material) as unknown[]) {
+          if (value instanceof THREE.Texture) (value as THREE.Texture).dispose();
         }
+        material.dispose();
       }
-    }
-
-    if (positiveValues.length === 0) {
-      ctx.fillStyle = 'black';
-      ctx.fillRect(0, 0, width, height);
-      return;
-    }
-    positiveValues.sort((a, b) => a - b);
-    const percentileIndex = Math.min(positiveValues.length - 1, Math.floor(positiveValues.length * 0.995));
-    const displayMax = Math.max(positiveValues[percentileIndex], positiveValues[positiveValues.length - 1] * 0.35, 1e-12);
-
-    const imageData = ctx.createImageData(width, height);
-    for (let r = 0; r < height; r++) {
-      for (let c = 0; c < width; c++) {
-        const linear = Math.min(1, Math.max(0, data[r][c] / displayMax));
-        const normalizedValue = mode === 'occupancy'
-          ? Math.sqrt(linear)
-          : Math.log1p(9 * linear) / Math.log(10);
-        const [red, green, blue] = this.jet(normalizedValue);
-        const index = (r * width + c) * 4;
-        imageData.data[index] = red;
-        imageData.data[index + 1] = green;
-        imageData.data[index + 2] = blue;
-        imageData.data[index + 3] = 255;
-      }
-    }
-    ctx.putImageData(imageData, 0, 0);
+    });
+    this.scene.clear();
   }
 }
