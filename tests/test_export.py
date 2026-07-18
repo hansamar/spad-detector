@@ -369,7 +369,20 @@ def test_bundle_zip_contents() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         zip_path = Path(tmp) / "bundle"
-        write_bundle_zip(zip_path, counts=counts, metadata=meta, summary=summary)
+        truth = {"truth_frequency_series_hz": np.full(4, 20.0, dtype=np.float32)}
+        truth_metadata = {
+            "schema": {"name": "spad-simulation-truth", "version": "1.0.0"},
+            "n_frames": 4,
+            "sample_rate_hz": 100,
+        }
+        write_bundle_zip(
+            zip_path,
+            counts=counts,
+            metadata=meta,
+            summary=summary,
+            truth=truth,
+            truth_metadata=truth_metadata,
+        )
         assert zip_path.with_suffix(".zip").exists()
 
         with zipfile.ZipFile(str(zip_path.with_suffix(".zip")), "r") as zf:
@@ -378,11 +391,17 @@ def test_bundle_zip_contents() -> None:
             assert "metadata.json" in names
             assert "summary.json" in names
             assert "manifest.json" in names
+            assert "truth.npz" in names
+            assert "truth.metadata.json" in names
             manifest = json.loads(zf.read("manifest.json"))
             assert manifest["schema"] == {"name": "spad-dataset", "version": "1.0.0"}
             assert manifest["artifacts"][0]["path"] == "counts.bin"
             assert manifest["artifacts"][0]["bytes"] == counts.nbytes
             assert len(manifest["artifacts"][0]["sha256"]) == 64
+            truth_entry = next(item for item in manifest["artifacts"] if item["path"] == "truth.npz")
+            assert truth_entry["role"] == "simulation_truth"
+            with np.load(zf.open("truth.npz")) as truth_data:
+                assert truth_data["truth_frequency_series_hz"].tolist() == [20.0] * 4
 
 
 def test_export_format_enum() -> None:

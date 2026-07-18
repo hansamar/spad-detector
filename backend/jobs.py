@@ -364,6 +364,41 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                 )
 
             # ── 写入 bundle（仅包含已生成的产物）──
+            truth_field_units = {
+                "truth_frequency_series_hz": "Hz",
+                "truth_propeller_frequency_series_hz": "Hz",
+                "truth_cx_series": "pixel",
+                "truth_cy_series": "pixel",
+                "truth_signal_series": "photons/frame",
+                "truth_bg_total_series": "photons/frame",
+                "truth_visibility_series": "unitless",
+                "truth_in_fov_series": "unitless",
+                "truth_range_series": "m",
+                "truth_phase_angle_series": "rad",
+                "truth_off_axis_x_urad_series": "urad",
+                "truth_off_axis_y_urad_series": "urad",
+                "truth_projected_width_px_series": "pixel",
+                "truth_projected_height_px_series": "pixel",
+            }
+            truth_arrays = {
+                field_name: np.asarray(result[field_name])
+                for field_name in truth_field_units
+                if result.get(field_name) is not None
+            }
+            truth_metadata = {
+                "schema": {"name": "spad-simulation-truth", "version": "1.0.0"},
+                "n_frames": n_frames,
+                "sample_rate_hz": sample_rate_hz,
+                "random_seed": seed,
+                "fields": {
+                    field_name: {
+                        "dtype": str(values.dtype),
+                        "shape": list(values.shape),
+                        "unit": truth_field_units[field_name],
+                    }
+                    for field_name, values in truth_arrays.items()
+                },
+            }
             write_bundle_zip(
                 artifacts_dir / "bundle",
                 counts=counts,
@@ -373,6 +408,8 @@ def _run_job(job_id: str, req: SimulateRequest) -> None:
                 tdc_metadata=tdc_metadata,
                 events=event_dict,
                 events_metadata=event_metadata,
+                truth=truth_arrays or None,
+                truth_metadata=truth_metadata,
             )
 
             # ── 写入 count_cube（在 event/TDC 之后，确保所有 warning 已追加到 metadata）──

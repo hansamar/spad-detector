@@ -139,8 +139,13 @@ bundle.zip
 ├── tdc_frame_cube.bin
 ├── tdc_frame_cube.metadata.json
 ├── events.npz
-└── events.metadata.json
+├── events.metadata.json
+├── truth.npz
+├── truth.metadata.json
+└── manifest.json
 ```
+
+`truth.npz` 保存未降采样的仿真真值序列，包括机械频率、像面中心、距离、可见性、背景与投影尺寸。它只用于仿真评估，不作为算法输入。`truth.metadata.json` 记录字段单位、shape、采样率和随机种子。
 
 ---
 
@@ -200,4 +205,4 @@ TDC frame cube 作为可选导出保留了与旧格式的兼容性，但不应�
 - `random_seed`、`assumptions`、`warnings`：复现实验所需的随机性与模型边界。
 - `artifact.bytes` 与 `artifact.sha256`：载荷大小和 SHA-256 完整性校验值。
 
-`bundle.zip` 额外包含 `manifest.json`，集中列出 `counts.bin`、`tdc_frame_cube.bin` 和 `events.npz` 中实际存在的载荷及其角色、大小和 SHA-256。算法程序应先读取 metadata 和 manifest，完成格式与完整性校验后再运行。
+`bundle.zip` 额外包含 `manifest.json`，集中列出 `counts.bin`、`tdc_frame_cube.bin`、`events.npz` 和 `truth.npz` 中实际存在的载荷及其角色、大小和 SHA-256。算法程序应先读取 metadata 和 manifest，完成格式与完整性校验后再运行。

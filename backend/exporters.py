@@ -307,6 +307,8 @@ def write_bundle_zip(
     tdc_metadata: dict | None = None,
     events: dict[str, np.ndarray] | None = None,
     events_metadata: dict | None = None,
+    truth: dict[str, np.ndarray] | None = None,
+    truth_metadata: dict | None = None,
 ) -> None:
     """写入完整 bundle .zip，包含所有可用产物。
 
@@ -364,7 +366,18 @@ def write_bundle_zip(
                     encoding="utf-8",
                 )
 
-        payload_names = ["counts.bin", "tdc_frame_cube.bin", "events.npz"]
+        if truth:
+            truth_path = tmp_root / "truth.npz"
+            np.savez_compressed(
+                str(truth_path),
+                **{key: np.asarray(value) for key, value in truth.items()},
+            )
+            (tmp_root / "truth.metadata.json").write_text(
+                json.dumps(truth_metadata or {}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        payload_names = ["counts.bin", "tdc_frame_cube.bin", "events.npz", "truth.npz"]
         manifest = {
             "schema": {
                 "name": DATASET_SCHEMA_NAME,
@@ -376,6 +389,7 @@ def write_bundle_zip(
                     "counts.bin": "photon_count_cube",
                     "tdc_frame_cube.bin": "tdc_frame_cube",
                     "events.npz": "event_list",
+                    "truth.npz": "simulation_truth",
                 }[name])
                 for name in payload_names
                 if (tmp_root / name).exists()
